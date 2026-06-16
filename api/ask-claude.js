@@ -1,9 +1,17 @@
 export const maxDuration = 60;
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
+  res.setHeader("Access-Control-Allow-Origin", "*")
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
 
-  const { userInput } = req.body;
+  if (req.method === "OPTIONS") {
+    return res.status(200).end()
+  }
+
+  if (req.method !== "POST") return res.status(405).end()
+
+  const { userInput } = req.body
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -17,8 +25,8 @@ export default async function handler(req, res) {
       max_tokens: 4096,
       messages: [{ role: "user", content: userInput }],
     }),
-  });
+  })
 
-  const data = await response.json();
-  res.status(200).json({ answer: data.content[0].text });
+  const data = await response.json()
+  res.status(200).json({ answer: data.content[0].text })
 }
