@@ -15,6 +15,7 @@ export default async function handler(req, res) {
     todoList,
     packingListHTML,
     budgetHTML,
+    bookingLinksHTML,
     destination,
     tripType,
     tripTiming,
@@ -122,6 +123,17 @@ export default async function handler(req, res) {
       </div>
       ` : ""}
 
+      <!-- Things to do now / booking links section -->
+      ${bookingLinksHTML ? `
+      <div style="margin-bottom:48px;">
+        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Things To Do Now</p>
+        <div style="font-family:Helvetica Neue,sans-serif;font-size:14px;color:${brandGreen};">
+          ${bookingLinksHTML}
+        </div>
+        <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;color:rgba(38,78,51,0.5);margin-top:12px;line-height:1.6;">These contain affiliate links — we may earn a small commission if you book through them, at no extra cost to you.</p>
+      </div>
+      ` : ""}
+
       <!-- Footer -->
       <div style="border-top:1px solid rgba(38,78,51,0.2);padding-top:32px;text-align:center;">
         <p style="font-family:Georgia,serif;font-size:22px;font-weight:300;color:${brandGreen};margin:0 0 8px;">The Away Edit</p>
@@ -131,7 +143,7 @@ export default async function handler(req, res) {
 
     </div>
   </div>
-</body>
+  </body>
 </html>
   `
 
