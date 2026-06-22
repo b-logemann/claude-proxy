@@ -21,7 +21,7 @@ export default async function handler(req, res) {
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{ role: "user", content: userInput }],
     }),
   })
@@ -30,5 +30,12 @@ export default async function handler(req, res) {
 
   if (data.error) return res.status(500).json({ error: data.error.message })
 
-  res.status(200).json({ answer: data.content[0].text })
+  // Guard against an unexpected/empty response shape
+  const answer = data?.content?.[0]?.text
+  if (typeof answer !== "string") {
+    return res.status(500).json({ error: "Empty response from model" })
+  }
+
+  // stop_reason === "max_tokens" means the answer was truncated at the cap
+  res.status(200).json({ answer, stopReason: data.stop_reason })
 }
