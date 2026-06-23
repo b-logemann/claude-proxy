@@ -1,175 +1,160 @@
-export const maxDuration = 60;
+// api/send-email.js
+import { Resend } from "resend"
+
+const resend = new Resend(process.env.RESEND_API_KEY)
+
+// Must be a domain you've verified in Resend (or use onboarding@resend.dev for testing).
+const FROM = "The Away Edit <hello@theawayeditco.com>"
+
+const GREEN = "rgb(38,78,51)"
+const BEIGE = "rgb(249,247,239)"
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*")
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    // ── CORS ──
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    if (req.method === "OPTIONS") return res.status(200).end()
+    if (req.method !== "POST")
+        return res.status(405).json({ error: "Method not allowed" })
 
-  if (req.method === "OPTIONS") return res.status(200).end()
-  if (req.method !== "POST") return res.status(405).end()
+    try {
+        const {
+            email,
+            itineraryTitle,
+            chosenItineraryHTML,
+            todoList,
+            packingListHTML,
+            budgetHTML,
+            destination,
+            tripType,
+            tripTiming,
+            tripLength,
+            numberOfPeople,
+        } = req.body || {}
 
-  const {
-    email,
-    itineraryTitle,
-    chosenItineraryHTML,
-    todoList,
-    packingListHTML,
-    budgetHTML,
-    bookingLinksHTML,
-    destination,
-    tripType,
-    tripTiming,
-    tripLength,
-    numberOfPeople,
-    budgetPerPerson,
-  } = req.body
+        if (!email || !email.includes("@"))
+            return res.status(400).json({ error: "A valid email is required." })
 
-  if (!email) {
-    return res.status(400).json({ error: "Missing email address" })
-  }
+        const safe = (v) => (v == null ? "" : String(v))
+        // Remove every <a>…</a> anchor (the booking links) for the guest copy.
+        const stripLinks = (html) =>
+            safe(html).replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, "")
+        const toB64 = (str) => Buffer.from(str, "utf-8").toString("base64")
 
-  const brandGreen = "rgb(38, 78, 51)"
-  const brandBeige = "rgb(249, 247, 239)"
+        const title = safe(itineraryTitle) || "Your Trip"
+        const dest = safe(destination)
+        const metaLine = [
+            dest,
+            safe(tripType),
+            tripLength ? `${tripLength} days` : "",
+            numberOfPeople ? `${numberOfPeople} people` : "",
+            safe(tripTiming),
+        ]
+            .filter(Boolean)
+            .join("  ·  ")
 
-  const emailHTML = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${itineraryTitle || "Your Away Edit"}</title>
-</head>
-<body style="margin:0;padding:0;background-color:${brandBeige};font-family:Georgia,serif;">
-  <div style="max-width:640px;margin:0 auto;padding:0;">
+        // Clean base for filenames (strip characters Windows/macOS dislike).
+        const fileBase = `The Away Edit - ${dest || title}`
+            .replace(/[^\w\s.-]/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
 
-    <!-- Header -->
-    <div style="background:${brandGreen};padding:48px 40px 40px;text-align:center;">
-      <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:rgba(249,247,239,0.6);margin:0 0 12px;">Your Curated Itinerary</p>
-      <h1 style="font-family:Georgia,serif;font-weight:300;font-size:42px;color:${brandBeige};margin:0;letter-spacing:0.04em;">The Away Edit</h1>
-    </div>
+        // ── Word-openable .doc wrapper (HTML with brand styling) ──
+        const docWrap = (innerHTML) => `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8" /><title>The Away Edit</title>
+<style>
+  body { font-family: Georgia, 'Times New Roman', serif; color: ${GREEN}; background: #fff; padding: 32px; line-height: 1.6; }
+  h1 { font-weight: 300; font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; border-bottom: 1px solid rgba(38,78,51,0.3); padding-bottom: 6px; margin: 28px 0 14px; font-family: Arial, sans-serif; }
+  .brand { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(38,78,51,0.6); font-family: Arial, sans-serif; }
+  .meta { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(38,78,51,0.6); font-family: Arial, sans-serif; margin: 0 0 20px; }
+  .itinerary, .partial-guide { border: none; padding: 0; }
+  .day-title { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin: 18px 0 10px; font-family: Arial, sans-serif; }
+  .time-label { font-size: 10px; text-transform: uppercase; background: rgba(38,78,51,0.1); padding: 2px 8px; border-radius: 10px; font-family: Arial, sans-serif; }
+  .time-content, .guide-item-detail { font-size: 13px; }
+  .cost-block { background: rgba(38,78,51,0.07); padding: 14px 18px; margin-top: 18px; }
+  table { width: 100%; border-collapse: collapse; }
+  .disclaimer { font-size: 10px; color: rgba(38,78,51,0.55); border-top: 1px solid rgba(38,78,51,0.15); padding-top: 10px; margin-top: 28px; font-family: Arial, sans-serif; }
+</style></head>
+<body>
+  <p class="brand">The Away Edit</p>
+  ${innerHTML}
+  <p class="disclaimer">Recommendations are curated suggestions and may have changed — always verify venues, prices, and availability before booking.</p>
+</body></html>`
 
-    <!-- Trip summary bar -->
-    <div style="background:rgba(38,78,51,0.08);padding:20px 40px;border-bottom:1px solid rgba(38,78,51,0.15);">
-      <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:${brandGreen};margin:0;">
-        ${destination || ""} &nbsp;·&nbsp; ${tripType || ""} &nbsp;·&nbsp; ${tripLength || ""} days &nbsp;·&nbsp; ${tripTiming || ""} &nbsp;·&nbsp; ${numberOfPeople || ""} people &nbsp;·&nbsp; ${budgetPerPerson || ""}/person
-      </p>
-    </div>
+        // 1) GUEST itinerary — booking links removed, safe to forward to guests.
+        const guestDoc = docWrap(
+            `<h1>${title}</h1>${metaLine ? `<p class="meta">${metaLine}</p>` : ""}` +
+                stripLinks(chosenItineraryHTML) +
+                (packingListHTML
+                    ? `<h2>Packing List</h2>${safe(packingListHTML)}`
+                    : "")
+        )
 
-    <div style="padding:40px;">
+        // 2) ADMIN copy — keeps every booking link, plus the planning checklist.
+        const adminDoc = docWrap(
+            `<h1>${title} — Planning Copy</h1>${metaLine ? `<p class="meta">${metaLine}</p>` : ""}` +
+                (todoList ? `<h2>Planning Checklist</h2>${safe(todoList)}` : "") +
+                `<h2>Itinerary with Booking Links</h2>` +
+                safe(chosenItineraryHTML)
+        )
 
-      <!-- Itinerary section -->
-      ${chosenItineraryHTML ? `
-      <div style="margin-bottom:48px;">
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Your Itinerary</p>
-        <div style="font-family:Georgia,serif;font-size:15px;color:${brandGreen};line-height:1.8;">
-          ${chosenItineraryHTML
-            .replace(/class="itinerary"/g, `style="margin-bottom:24px;"`)
-            .replace(/class="option-label"/g, `style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:rgba(38,78,51,0.6);margin-bottom:8px;"`)
-            .replace(/class="itinerary-title"/g, `style="font-family:Georgia,serif;font-size:26px;font-weight:300;color:${brandGreen};margin:0 0 12px;"`)
-            .replace(/class="itinerary-summary"/g, `style="font-size:14px;font-family:Helvetica Neue,sans-serif;font-weight:300;color:${brandGreen};line-height:1.8;margin-bottom:24px;"`)
-            .replace(/class="day-block"/g, `style="border-left:2px solid ${brandGreen};padding-left:20px;margin-bottom:24px;"`)
-            .replace(/class="day-title"/g, `style="font-family:Helvetica Neue,sans-serif;font-size:10px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;color:${brandGreen};margin-bottom:14px;"`)
-            .replace(/class="time-label"/g, `style="display:inline-block;font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;background:rgba(38,78,51,0.1);color:${brandGreen};padding:2px 10px;border-radius:20px;margin-bottom:6px;"`)
-            .replace(/class="time-content"/g, `style="font-size:14px;color:${brandGreen};line-height:1.7;font-family:Helvetica Neue,sans-serif;font-weight:300;margin-bottom:12px;"`)
-            .replace(/class="time-block"/g, `style="margin-bottom:14px;"`)
-            .replace(/class="cost-block"/g, `style="background:rgba(38,78,51,0.07);padding:18px 22px;margin-top:24px;border:1px solid rgba(38,78,51,0.15);"`)
-            .replace(/class="cost-title"/g, `style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:${brandGreen};margin-bottom:8px;font-weight:600;"`)
-            .replace(/class="cost-content"/g, `style="font-size:13px;color:${brandGreen};line-height:1.8;font-family:Helvetica Neue,sans-serif;font-weight:300;"`)
-          }
-        </div>
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;color:rgba(38,78,51,0.5);line-height:1.6;margin-top:16px;border-top:1px solid rgba(38,78,51,0.12);padding-top:12px;">AI-generated itinerary. All venues, prices, and availability should be verified independently before booking.</p>
-      </div>
-      ` : ""}
+        // 3) BUDGET — Excel-openable .xls (HTML table that Excel imports cleanly).
+        const budgetXls = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8" />
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+<x:Name>Budget</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+</head><body><h3>The Away Edit — ${dest || title} Budget (per person)</h3>${safe(budgetHTML)}</body></html>`
 
-      <!-- Packing list section -->
-      ${packingListHTML ? `
-      <div style="margin-bottom:48px;">
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Your Packing List</p>
-        <div style="font-family:Helvetica Neue,sans-serif;font-size:14px;color:${brandGreen};line-height:1.9;font-weight:300;">
-          ${packingListHTML
-            .replace(/class="pack-section"/g, `style="margin-bottom:20px;"`)
-            .replace(/class="pack-category"/g, `style="font-family:Helvetica Neue,sans-serif;font-size:10px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;color:${brandGreen};border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:6px;margin-bottom:10px;"`)
-            .replace(/class="pack-list"/g, `style="padding-left:18px;margin:0;"`)
-            .replace(/class="pack-item"/g, `style="font-size:14px;color:${brandGreen};line-height:1.9;font-family:Helvetica Neue,sans-serif;font-weight:300;"`)
-          }
-        </div>
-      </div>
-      ` : ""}
+        // ── Assemble attachments ──
+        const attachments = [
+            {
+                filename: `${fileBase} - Itinerary.doc`,
+                content: toB64(guestDoc),
+            },
+            {
+                filename: `${fileBase} - Planning & Booking Links.doc`,
+                content: toB64(adminDoc),
+            },
+        ]
+        if (budgetHTML)
+            attachments.push({
+                filename: `${fileBase} - Budget.xls`,
+                content: toB64(budgetXls),
+            })
 
-      <!-- Planning checklist section -->
-      ${todoList ? `
-      <div style="margin-bottom:48px;">
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Your Planning Checklist</p>
-        <div style="font-family:Helvetica Neue,sans-serif;font-size:14px;color:${brandGreen};line-height:1.9;font-weight:300;">
-          ${todoList
-            .replace(/class="todo-section"/g, `style="margin-bottom:24px;"`)
-            .replace(/class="todo-category"/g, `style="font-family:Helvetica Neue,sans-serif;font-size:10px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;color:${brandGreen};border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:6px;margin-bottom:10px;"`)
-            .replace(/class="todo-list"/g, `style="padding-left:18px;margin:0;"`)
-            .replace(/class="todo-item"/g, `style="font-size:14px;color:${brandGreen};line-height:1.9;font-family:Helvetica Neue,sans-serif;font-weight:300;"`)
-            .replace(/class="todo-link"/g, `style="color:${brandGreen};font-weight:500;"`)
-          }
-        </div>
-      </div>
-      ` : ""}
+        // ── Short branded email body (the documents are attached) ──
+        const emailHTML = `
+<div style="font-family:Georgia,serif;color:${GREEN};background:${BEIGE};padding:32px;max-width:560px;margin:0 auto;">
+  <p style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:rgba(38,78,51,0.6);font-family:Arial,sans-serif;">The Away Edit</p>
+  <h1 style="font-weight:300;font-size:26px;margin:4px 0 16px;">Your ${dest || "trip"} plans are here</h1>
+  <p style="font-size:14px;line-height:1.7;font-family:Arial,sans-serif;font-weight:300;">Everything's attached and ready to go:</p>
+  <ul style="font-size:14px;line-height:1.8;font-family:Arial,sans-serif;font-weight:300;">
+    <li><strong>Itinerary</strong> — a clean copy you can forward to your group.</li>
+    <li><strong>Planning &amp; Booking Links</strong> — your version, with every booking link and the planning checklist.</li>
+    ${budgetHTML ? "<li><strong>Budget</strong> — an editable spreadsheet.</li>" : ""}
+  </ul>
+  <p style="font-size:12px;color:rgba(38,78,51,0.6);line-height:1.7;font-family:Arial,sans-serif;border-top:1px solid rgba(38,78,51,0.15);padding-top:14px;margin-top:24px;">
+    Some links are affiliate links — we may earn a small commission, at no extra cost to you. Always verify venues, prices, and availability before booking.
+  </p>
+  <p style="font-size:12px;letter-spacing:0.1em;color:rgba(38,78,51,0.6);font-family:Arial,sans-serif;">theawayeditco.com</p>
+</div>`
 
-      <!-- Budget section -->
-      ${budgetHTML ? `
-      <div style="margin-bottom:48px;">
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Your Budget Overview</p>
-        <div style="font-family:Helvetica Neue,sans-serif;font-size:14px;color:${brandGreen};">
-          ${budgetHTML}
-        </div>
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;color:rgba(38,78,51,0.5);margin-top:12px;">Download your editable budget spreadsheet from the link in this email.</p>
-      </div>
-      ` : ""}
+        await resend.emails.send({
+            from: FROM,
+            to: email,
+            subject: `Your ${dest || "trip"} plans from The Away Edit`,
+            html: emailHTML,
+            attachments,
+        })
 
-      <!-- Things to do now / booking links section -->
-      ${bookingLinksHTML ? `
-      <div style="margin-bottom:48px;">
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Things To Do Now</p>
-        <div style="font-family:Helvetica Neue,sans-serif;font-size:14px;color:${brandGreen};">
-          ${bookingLinksHTML}
-        </div>
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;color:rgba(38,78,51,0.5);margin-top:12px;line-height:1.6;">These contain affiliate links — we may earn a small commission if you book through them, at no extra cost to you.</p>
-      </div>
-      ` : ""}
-
-      <!-- Footer -->
-      <div style="border-top:1px solid rgba(38,78,51,0.2);padding-top:32px;text-align:center;">
-        <p style="font-family:Georgia,serif;font-size:22px;font-weight:300;color:${brandGreen};margin:0 0 8px;">The Away Edit</p>
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:11px;color:rgba(38,78,51,0.5);margin:0 0 16px;">theawayeditco.com &nbsp;·&nbsp; theawayeditco@gmail.com</p>
-        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;color:rgba(38,78,51,0.4);margin:0;">Please verify all bookings and availability independently before confirming.</p>
-      </div>
-
-    </div>
-  </div>
-  </body>
-</html>
-  `
-
-  try {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: process.env.FROM_EMAIL,
-        to: email,
-        subject: `Your Away Edit — ${itineraryTitle || "Your Perfect Trip"}`,
-        html: emailHTML,
-      }),
-    })
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      return res.status(500).json({ error: data.message || "Failed to send email" })
+        return res.status(200).json({ success: true })
+    } catch (err) {
+        console.error("send-email error:", err)
+        return res
+            .status(500)
+            .json({ success: false, error: err.message || "Send failed" })
     }
-
-    res.status(200).json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message || "Unexpected error" })
-  }
 }
