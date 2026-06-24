@@ -3,13 +3,31 @@ export const maxDuration = 30
 
 const TOKEN = process.env.TRAVELPAYOUTS_TOKEN
 
-// Flights — Aviasales "prices for dates". price is per passenger.
+// Fetch + parse safely. Never throws — returns status + parsed json (or null)
+// + a short snippet of the body so we can see HTML error pages.
+async function safeGet(url) {
+    try {
+        const r = await fetch(url)
+        const text = await r.text()
+        let json = null
+        try {
+            json = JSON.parse(text)
+        } catch {
+            /* non-JSON (e.g. an HTML error page) */
+        }
+        return { ok: r.ok, status: r.status, json, snippet: text.slice(0, 140) }
+    } catch (e) {
+        return { ok: false, status: 0, json: null, snippet: String(e.message) }
+    }
+}
+
 async function getFlight({ origin, destination, departureDate, returnDate }) {
-    if (!origin || !destination || !departureDate) return { found: false }
+    if (!origin || !destination || !departureDate)
+        return { result: { found: false }, debug: { skipped: "missing args" } }
     const params = new URLSearchParams({
         origin,
         destination,
-        departure_at: departureDate, // "YYYY-MM-DD" or "YYYY-MM"
+        departure_at: departureDate,
         ...(returnDate ? { return_at: returnDate } : {}),
         currency: "usd",
         sorting: "price",
@@ -19,26 +37,30 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
         one_way: returnDate ? "false" : "true",
         token: TOKEN,
     })
-    const r = await fetch(
+    const g = await safeGet(
         `https://api.travelpayouts.com/aviasales/v3/prices_for_dates?${params}`
     )
-    const data = await r.json()
-    if (!data?.success || !Array.isArray(data.data)) return { found: false }
-    const prices = data.data
+    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
+    const arr = g.json?.data
+    if (!Array.isArray(arr)) return { result: { found: false }, debug }
+    const prices = arr
         .map((d) => d.price)
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
-    if (!prices.length) return { found: false }
+    if (!prices.length) return { result: { found: false }, debug }
     return {
-        found: true,
-        cheapestPerPerson: Math.round(prices[0]),
-        typicalPerPerson: Math.round(prices[Math.floor(prices.length / 2)]),
+        result: {
+            found: true,
+            cheapestPerPerson: Math.round(prices[0]),
+            typicalPerPerson: Math.round(prices[Math.floor(prices.length / 2)]),
+        },
+        debug,
     }
 }
 
-// Hotels — Hotellook cache. priceAvg/priceFrom = avg/min for the stay (per room).
 async function getHotel({ cityName, checkInDate, checkOutDate }) {
-    if (!cityName || !checkInDate || !checkOutDate) return { found: false }
+    if (!cityName || !checkInDate || !checkOutDate)
+        return { result: { found: false }, debug: { skipped: "missing args" } }
     const params = new URLSearchParams({
         location: cityName,
         checkIn: checkInDate,
@@ -47,26 +69,31 @@ async function getHotel({ cityName, checkInDate, checkOutDate }) {
         limit: "30",
         token: TOKEN,
     })
-    const r = await fetch(
+    const g = await safeGet(
         `https://engine.hotellook.com/api/v2/cache.json?${params}`
     )
-    const data = await r.json()
-    if (!Array.isArray(data) || !data.length) return { found: false }
+    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
+    const arr = g.json
+    if (!Array.isArray(arr) || !arr.length)
+        return { result: { found: false }, debug }
     const nights = Math.max(
         1,
         Math.round((new Date(checkOutDate) - new Date(checkInDate)) / 86400000)
     )
-    const stayTotals = data
+    const stayTotals = arr
         .map((h) => h.priceAvg ?? h.priceFrom)
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
-    if (!stayTotals.length) return { found: false }
-    const medianTotal = stayTotals[Math.floor(stayTotals.length / 2)] // full stay, 1 room
+    if (!stayTotals.length) return { result: { found: false }, debug }
+    const medianTotal = stayTotals[Math.floor(stayTotals.length / 2)]
     return {
-        found: true,
-        nights,
-        perNightPerRoom: Math.round(medianTotal / nights),
-        perPersonTotal: Math.round(medianTotal / 2), // double occupancy
+        result: {
+            found: true,
+            nights,
+            perNightPerRoom: Math.round(medianTotal / nights),
+            perPersonTotal: Math.round(medianTotal / 2),
+        },
+        debug,
     }
 }
 
@@ -81,20 +108,29 @@ export default async function handler(req, res) {
 
     try {
         const {
-            origin, // flight origin IATA, e.g. "JFK"
-            destination, // flight destination IATA, e.g. "ROM"
-            cityName, // hotel city name, e.g. "Rome"
+            origin,
+            destination,
+            cityName,
             departureDate,
             returnDate,
             checkInDate,
             checkOutDate,
         } = req.body || {}
 
-        const [flight, hotel] = await Promise.all([
-            getFlight({ origin, destination, departureDate, returnDate }),
-            getHotel({ cityName, checkInDate, checkOutDate }),
-        ])
-        return res.status(200).json({ currency: "USD", flight, hotel })
+        const flight = await getFlight({
+            origin,
+            destination,
+            departureDate,
+            returnDate,
+        })
+        const hotel = await getHotel({ cityName, checkInDate, checkOutDate })
+
+        return res.status(200).json({
+            currency: "USD",
+            flight: flight.result,
+            hotel: hotel.result,
+            _debug: { flight: flight.debug, hotel: hotel.debug },
+        })
     } catch (err) {
         return res.status(500).json({ error: err.message })
     }
