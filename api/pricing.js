@@ -20,17 +20,22 @@ async function safeGet(url) {
 async function getFlight({ origin, destination, departureDate, returnDate }) {
     if (!origin || !destination || !departureDate)
         return { result: { found: false }, debug: { skipped: "missing args" } }
+
+    // Travelpayouts wants MONTH granularity (YYYY-MM), not an exact date.
+    const depMonth = String(departureDate).slice(0, 7)
+    const retMonth = returnDate ? String(returnDate).slice(0, 7) : null
+
     const params = new URLSearchParams({
         origin,
         destination,
-        departure_at: departureDate,
-        ...(returnDate ? { return_at: returnDate } : {}),
+        departure_at: depMonth,
+        ...(retMonth ? { return_at: retMonth } : {}),
         currency: "usd",
         sorting: "price",
         direct: "false",
         limit: "30",
         page: "1",
-        one_way: returnDate ? "false" : "true",
+        one_way: retMonth ? "false" : "true",
         token: TOKEN,
     })
     const g = await safeGet(
@@ -50,6 +55,7 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
     if (!prices.length) return { result: { found: false }, debug }
+    debug.sample = prices[0]
     return {
         result: {
             found: true,
@@ -67,37 +73,21 @@ async function getHotel({ cityName, checkInDate, checkOutDate }) {
         1,
         Math.round((new Date(checkOutDate) - new Date(checkInDate)) / 86400000)
     )
-    const city = encodeURIComponent(cityName)
-    const common = `checkIn=${checkInDate}&checkOut=${checkOutDate}&currency=usd&limit=30&token=${TOKEN}`
-
-    const cache = await safeGet(
-        `https://engine.hotellook.com/api/v2/cache.json?location=${city}&${common}`
+    // NOTE: endpoint below is retired (404). Awaiting current hotel URL.
+    const g = await safeGet(
+        `https://engine.hotellook.com/api/v2/cache.json?location=${encodeURIComponent(
+            cityName
+        )}&checkIn=${checkInDate}&checkOut=${checkOutDate}&currency=usd&limit=30&token=${TOKEN}`
     )
-    const lookup = await safeGet(
-        `https://engine.hotellook.com/api/v2/lookup.json?query=${city}&lang=en&lookFor=city&limit=1&token=${TOKEN}`
-    )
-    const debug = {
-        cache: {
-            status: cache.status,
-            isJson: !!cache.json,
-            len: Array.isArray(cache.json) ? cache.json.length : null,
-            snippet: cache.json ? undefined : cache.snippet,
-        },
-        lookup: {
-            status: lookup.status,
-            isJson: !!lookup.json,
-            snippet: lookup.json ? undefined : lookup.snippet,
-        },
-    }
-
-    const arr = Array.isArray(cache.json) ? cache.json : null
+    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
+    const arr = Array.isArray(g.json) ? g.json : null
     if (!arr || !arr.length) return { result: { found: false }, debug }
-    const stayTotals = arr
+    const totals = arr
         .map((h) => h.priceAvg ?? h.priceFrom)
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
-    if (!stayTotals.length) return { result: { found: false }, debug }
-    const medianTotal = stayTotals[Math.floor(stayTotals.length / 2)]
+    if (!totals.length) return { result: { found: false }, debug }
+    const medianTotal = totals[Math.floor(totals.length / 2)]
     return {
         result: {
             found: true,
