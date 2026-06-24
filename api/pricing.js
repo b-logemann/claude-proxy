@@ -2,6 +2,7 @@
 export const maxDuration = 30
 
 const TOKEN = process.env.TRAVELPAYOUTS_TOKEN
+const SERPAPI_KEY = process.env.SERPAPI_KEY
 
 async function safeGet(url) {
     try {
@@ -11,20 +12,18 @@ async function safeGet(url) {
         try {
             json = JSON.parse(text)
         } catch {}
-        return { ok: r.ok, status: r.status, json, snippet: text.slice(0, 140) }
+        return { ok: r.ok, status: r.status, json, snippet: text.slice(0, 160) }
     } catch (e) {
         return { ok: false, status: 0, json: null, snippet: String(e.message) }
     }
 }
 
+// Flights — Travelpayouts (Aviasales), month granularity, per-person price.
 async function getFlight({ origin, destination, departureDate, returnDate }) {
     if (!origin || !destination || !departureDate)
         return { result: { found: false }, debug: { skipped: "missing args" } }
-
-    // Travelpayouts wants MONTH granularity (YYYY-MM), not an exact date.
     const depMonth = String(departureDate).slice(0, 7)
     const retMonth = returnDate ? String(returnDate).slice(0, 7) : null
-
     const params = new URLSearchParams({
         origin,
         destination,
@@ -45,9 +44,7 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
     if (g.json) {
         debug.success = g.json.success
         debug.dataLen = Array.isArray(g.json.data) ? g.json.data.length : null
-        if (g.json.error) debug.error = g.json.error
     } else debug.snippet = g.snippet
-
     const arr = g.json?.data
     if (!Array.isArray(arr) || !arr.length) return { result: { found: false }, debug }
     const prices = arr
@@ -55,7 +52,6 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
     if (!prices.length) return { result: { found: false }, debug }
-    debug.sample = prices[0]
     return {
         result: {
             found: true,
@@ -66,34 +62,51 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
     }
 }
 
+// Hotels — SerpApi Google Hotels. rate_per_night is per room; per-person ÷2.
 async function getHotel({ cityName, checkInDate, checkOutDate }) {
     if (!cityName || !checkInDate || !checkOutDate)
         return { result: { found: false }, debug: { skipped: "missing args" } }
+    if (!SERPAPI_KEY)
+        return {
+            result: { found: false },
+            debug: { error: "SERPAPI_KEY not set" },
+        }
     const nights = Math.max(
         1,
         Math.round((new Date(checkOutDate) - new Date(checkInDate)) / 86400000)
     )
-    // NOTE: endpoint below is retired (404). Awaiting current hotel URL.
-    const g = await safeGet(
-        `https://engine.hotellook.com/api/v2/cache.json?location=${encodeURIComponent(
-            cityName
-        )}&checkIn=${checkInDate}&checkOut=${checkOutDate}&currency=usd&limit=30&token=${TOKEN}`
-    )
-    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
-    const arr = Array.isArray(g.json) ? g.json : null
-    if (!arr || !arr.length) return { result: { found: false }, debug }
-    const totals = arr
-        .map((h) => h.priceAvg ?? h.priceFrom)
+    const params = new URLSearchParams({
+        engine: "google_hotels",
+        q: `${cityName} hotels`,
+        check_in_date: checkInDate,
+        check_out_date: checkOutDate,
+        adults: "2",
+        currency: "USD",
+        gl: "us",
+        hl: "en",
+        api_key: SERPAPI_KEY,
+    })
+    const g = await safeGet(`https://serpapi.com/search.json?${params}`)
+    const debug = {
+        status: g.status,
+        error: g.json?.error,
+        snippet: g.json ? undefined : g.snippet,
+    }
+    const props = g.json?.properties
+    if (!Array.isArray(props) || !props.length)
+        return { result: { found: false }, debug }
+    const nightlies = props
+        .map((p) => p.rate_per_night?.extracted_lowest)
         .filter((n) => typeof n === "number" && n > 0)
         .sort((a, b) => a - b)
-    if (!totals.length) return { result: { found: false }, debug }
-    const medianTotal = totals[Math.floor(totals.length / 2)]
+    if (!nightlies.length) return { result: { found: false }, debug }
+    const medianNightly = nightlies[Math.floor(nightlies.length / 2)]
     return {
         result: {
             found: true,
             nights,
-            perNightPerRoom: Math.round(medianTotal / nights),
-            perPersonTotal: Math.round(medianTotal / 2),
+            perNightPerRoom: Math.round(medianNightly),
+            perPersonTotal: Math.round((medianNightly * nights) / 2), // double occupancy
         },
         debug,
     }
@@ -105,8 +118,6 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type")
     if (req.method === "OPTIONS") return res.status(200).end()
     if (req.method !== "POST") return res.status(405).end()
-    if (!TOKEN)
-        return res.status(500).json({ error: "TRAVELPAYOUTS_TOKEN not set" })
 
     try {
         const {
@@ -118,7 +129,6 @@ export default async function handler(req, res) {
             checkInDate,
             checkOutDate,
         } = req.body || {}
-
         const flight = await getFlight({
             origin,
             destination,
@@ -126,7 +136,6 @@ export default async function handler(req, res) {
             returnDate,
         })
         const hotel = await getHotel({ cityName, checkInDate, checkOutDate })
-
         return res.status(200).json({
             currency: "USD",
             flight: flight.result,
