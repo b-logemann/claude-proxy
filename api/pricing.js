@@ -3,8 +3,6 @@ export const maxDuration = 30
 
 const TOKEN = process.env.TRAVELPAYOUTS_TOKEN
 
-// Fetch + parse safely. Never throws — returns status + parsed json (or null)
-// + a short snippet of the body so we can see HTML error pages.
 async function safeGet(url) {
     try {
         const r = await fetch(url)
@@ -12,9 +10,7 @@ async function safeGet(url) {
         let json = null
         try {
             json = JSON.parse(text)
-        } catch {
-            /* non-JSON (e.g. an HTML error page) */
-        }
+        } catch {}
         return { ok: r.ok, status: r.status, json, snippet: text.slice(0, 140) }
     } catch (e) {
         return { ok: false, status: 0, json: null, snippet: String(e.message) }
@@ -40,9 +36,15 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
     const g = await safeGet(
         `https://api.travelpayouts.com/aviasales/v3/prices_for_dates?${params}`
     )
-    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
+    const debug = { status: g.status }
+    if (g.json) {
+        debug.success = g.json.success
+        debug.dataLen = Array.isArray(g.json.data) ? g.json.data.length : null
+        if (g.json.error) debug.error = g.json.error
+    } else debug.snippet = g.snippet
+
     const arr = g.json?.data
-    if (!Array.isArray(arr)) return { result: { found: false }, debug }
+    if (!Array.isArray(arr) || !arr.length) return { result: { found: false }, debug }
     const prices = arr
         .map((d) => d.price)
         .filter((n) => typeof n === "number" && n > 0)
@@ -61,25 +63,35 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
 async function getHotel({ cityName, checkInDate, checkOutDate }) {
     if (!cityName || !checkInDate || !checkOutDate)
         return { result: { found: false }, debug: { skipped: "missing args" } }
-    const params = new URLSearchParams({
-        location: cityName,
-        checkIn: checkInDate,
-        checkOut: checkOutDate,
-        currency: "usd",
-        limit: "30",
-        token: TOKEN,
-    })
-    const g = await safeGet(
-        `https://engine.hotellook.com/api/v2/cache.json?${params}`
-    )
-    const debug = { status: g.status, snippet: g.json ? undefined : g.snippet }
-    const arr = g.json
-    if (!Array.isArray(arr) || !arr.length)
-        return { result: { found: false }, debug }
     const nights = Math.max(
         1,
         Math.round((new Date(checkOutDate) - new Date(checkInDate)) / 86400000)
     )
+    const city = encodeURIComponent(cityName)
+    const common = `checkIn=${checkInDate}&checkOut=${checkOutDate}&currency=usd&limit=30&token=${TOKEN}`
+
+    const cache = await safeGet(
+        `https://engine.hotellook.com/api/v2/cache.json?location=${city}&${common}`
+    )
+    const lookup = await safeGet(
+        `https://engine.hotellook.com/api/v2/lookup.json?query=${city}&lang=en&lookFor=city&limit=1&token=${TOKEN}`
+    )
+    const debug = {
+        cache: {
+            status: cache.status,
+            isJson: !!cache.json,
+            len: Array.isArray(cache.json) ? cache.json.length : null,
+            snippet: cache.json ? undefined : cache.snippet,
+        },
+        lookup: {
+            status: lookup.status,
+            isJson: !!lookup.json,
+            snippet: lookup.json ? undefined : lookup.snippet,
+        },
+    }
+
+    const arr = Array.isArray(cache.json) ? cache.json : null
+    if (!arr || !arr.length) return { result: { found: false }, debug }
     const stayTotals = arr
         .map((h) => h.priceAvg ?? h.priceFrom)
         .filter((n) => typeof n === "number" && n > 0)
