@@ -1,7 +1,7 @@
 // api/feasibility.js
 export const maxDuration = 30
 
-const TOKEN = process.env.TRAVELPAYOUTS_TOKEN
+const SERPAPI_KEY = process.env.SERPAPI_KEY
 
 async function safeGet(url) {
     try {
@@ -17,14 +17,10 @@ async function safeGet(url) {
     }
 }
 
-// Resolve a city NAME or an airport CODE → IATA code (Travelpayouts autocomplete).
+// City NAME or airport CODE → IATA code (Travelpayouts autocomplete, free).
 const iataCache = {}
-async function resolveIATA(term) {
-    if (!term) return null
-    const t = String(term).trim()
-    if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase() // already a code
-    if (iataCache[t]) return iataCache[t]
-    const q = t.split(",")[0].trim() // "New York City, USA" → "New York City"
+async function lookupCode(q) {
+    if (!q) return null
     const g = await safeGet(
         `https://autocomplete.travelpayouts.com/places2?term=${encodeURIComponent(
             q
@@ -34,46 +30,64 @@ async function resolveIATA(term) {
     const pick =
         arr.find((p) => p.type === "city" && p.code) ||
         arr.find((p) => p.code)
-    const code = pick?.code || null
+    return pick?.code || null
+}
+async function resolveIATA(term) {
+    if (!term) return null
+    const t = String(term).trim()
+    if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase()
+    if (iataCache[t]) return iataCache[t]
+    const q = t.split(",")[0].trim()
+    let code = await lookupCode(q)
+    if (!code && /\bcity\b/i.test(q))
+        code = await lookupCode(q.replace(/\s*city\s*$/i, "").trim())
     if (code) iataCache[t] = code
     return code
 }
 
-async function routeInfo(origin, destination, depMonth, retMonth) {
-    if (!origin || !destination || !depMonth)
+// Real flight facts for one route via SerpApi Google Flights.
+async function routeInfo(depCode, arrCode, depMonth, retMonth) {
+    if (!depCode || !arrCode || !depMonth)
         return { found: false, reason: "missing codes" }
     const params = new URLSearchParams({
-        origin,
-        destination,
-        departure_at: depMonth,
-        ...(retMonth ? { return_at: retMonth } : {}),
-        currency: "usd",
-        sorting: "price",
-        direct: "false",
-        limit: "30",
-        page: "1",
-        one_way: retMonth ? "false" : "true",
-        token: TOKEN,
+        engine: "google_flights",
+        departure_id: depCode,
+        arrival_id: arrCode,
+        outbound_date: `${depMonth}-15`,
+        ...(retMonth ? { return_date: `${retMonth}-18` } : {}),
+        currency: "USD",
+        type: retMonth ? "1" : "2",
+        hl: "en",
+        api_key: SERPAPI_KEY,
     })
-    const g = await safeGet(
-        `https://api.travelpayouts.com/aviasales/v3/prices_for_dates?${params}`
+    const g = await safeGet(`https://serpapi.com/search.json?${params}`)
+    if (g.json?.error) return { found: false, error: g.json.error }
+    const flights = [
+        ...(Array.isArray(g.json?.best_flights) ? g.json.best_flights : []),
+        ...(Array.isArray(g.json?.other_flights) ? g.json.other_flights : []),
+    ]
+    if (!flights.length) return { found: false, status: g.status }
+
+    const priced = flights.filter(
+        (f) => typeof f.price === "number" && f.price > 0
     )
-    const arr = Array.isArray(g.json?.data) ? g.json.data : []
-    const priced = arr.filter((o) => typeof o.price === "number" && o.price > 0)
-    if (!priced.length) return { found: false, status: g.status }
-    const cheapest = [...priced].sort((a, b) => a.price - b.price)[0]
-    const durs = arr
-        .map((o) => o.duration_to)
+    const cheapest = priced.sort((a, b) => a.price - b.price)[0] || flights[0]
+    const durations = flights
+        .map((f) => f.total_duration)
         .filter((n) => typeof n === "number" && n > 0)
-    const fastestMin = durs.length ? Math.min(...durs) : null
+    const fastestMin = durations.length ? Math.min(...durations) : null
+    const stopsOf = (f) => (Array.isArray(f.flights) ? f.flights.length - 1 : null)
+
     return {
         found: true,
-        cheapestPrice: Math.round(cheapest.price),
-        cheapestStops:
-            typeof cheapest.transfers === "number" ? cheapest.transfers : null,
+        cheapestPrice:
+            typeof cheapest?.price === "number"
+                ? Math.round(cheapest.price)
+                : null,
+        cheapestStops: stopsOf(cheapest),
         cheapestHours:
-            typeof cheapest.duration_to === "number"
-                ? +(cheapest.duration_to / 60).toFixed(1)
+            typeof cheapest?.total_duration === "number"
+                ? +(cheapest.total_duration / 60).toFixed(1)
                 : null,
         fastestHours: fastestMin != null ? +(fastestMin / 60).toFixed(1) : null,
     }
@@ -85,8 +99,8 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type")
     if (req.method === "OPTIONS") return res.status(200).end()
     if (req.method !== "POST") return res.status(405).end()
-    if (!TOKEN)
-        return res.status(500).json({ error: "TRAVELPAYOUTS_TOKEN not set" })
+    if (!SERPAPI_KEY)
+        return res.status(500).json({ error: "SERPAPI_KEY not set" })
 
     try {
         const { origin, candidates = [], departureDate, returnDate } =
