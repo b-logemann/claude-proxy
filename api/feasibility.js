@@ -17,10 +17,31 @@ async function safeGet(url) {
     }
 }
 
-// Real flight facts for one route (origin → destination IATA), month-level.
+// Resolve a city NAME or an airport CODE → IATA code (Travelpayouts autocomplete).
+const iataCache = {}
+async function resolveIATA(term) {
+    if (!term) return null
+    const t = String(term).trim()
+    if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase() // already a code
+    if (iataCache[t]) return iataCache[t]
+    const q = t.split(",")[0].trim() // "New York City, USA" → "New York City"
+    const g = await safeGet(
+        `https://autocomplete.travelpayouts.com/places2?term=${encodeURIComponent(
+            q
+        )}&locale=en&types[]=city&types[]=airport`
+    )
+    const arr = Array.isArray(g.json) ? g.json : []
+    const pick =
+        arr.find((p) => p.type === "city" && p.code) ||
+        arr.find((p) => p.code)
+    const code = pick?.code || null
+    if (code) iataCache[t] = code
+    return code
+}
+
 async function routeInfo(origin, destination, depMonth, retMonth) {
     if (!origin || !destination || !depMonth)
-        return { found: false, reason: "missing args" }
+        return { found: false, reason: "missing codes" }
     const params = new URLSearchParams({
         origin,
         destination,
@@ -40,13 +61,11 @@ async function routeInfo(origin, destination, depMonth, retMonth) {
     const arr = Array.isArray(g.json?.data) ? g.json.data : []
     const priced = arr.filter((o) => typeof o.price === "number" && o.price > 0)
     if (!priced.length) return { found: false, status: g.status }
-
     const cheapest = [...priced].sort((a, b) => a.price - b.price)[0]
     const durs = arr
-        .map((o) => o.duration_to) // one-way minutes, INCLUDING layovers
+        .map((o) => o.duration_to)
         .filter((n) => typeof n === "number" && n > 0)
     const fastestMin = durs.length ? Math.min(...durs) : null
-
     return {
         found: true,
         cheapestPrice: Math.round(cheapest.price),
@@ -74,15 +93,26 @@ export default async function handler(req, res) {
             req.body || {}
         const depMonth = departureDate ? String(departureDate).slice(0, 7) : null
         const retMonth = returnDate ? String(returnDate).slice(0, 7) : null
+        const originCode = await resolveIATA(origin)
 
         const results = await Promise.all(
-            candidates.map(async (c) => ({
-                id: c?.id,
-                destination: c?.destination,
-                ...(await routeInfo(origin, c?.destination, depMonth, retMonth)),
-            }))
+            candidates.map(async (c) => {
+                const destinationCode = await resolveIATA(c?.destination)
+                return {
+                    id: c?.id,
+                    destination: c?.destination,
+                    originCode,
+                    destinationCode,
+                    ...(await routeInfo(
+                        originCode,
+                        destinationCode,
+                        depMonth,
+                        retMonth
+                    )),
+                }
+            })
         )
-        return res.status(200).json({ results })
+        return res.status(200).json({ originCode, results })
     } catch (err) {
         return res.status(500).json({ error: err.message })
     }
