@@ -17,42 +17,50 @@ async function safeGet(url) {
     }
 }
 
-// City NAME or airport CODE → IATA code (Travelpayouts autocomplete, free).
-const iataCache = {}
-async function lookupCode(q) {
-    if (!q) return null
+// City NAME → comma-joined AIRPORT codes (e.g. "New York" → "JFK,EWR,LGA").
+// Google Flights needs airport codes, not metro codes, so we prefer airports.
+const codeCache = {}
+async function airportsFor(q) {
     const g = await safeGet(
         `https://autocomplete.travelpayouts.com/places2?term=${encodeURIComponent(
             q
-        )}&locale=en&types[]=city&types[]=airport`
+        )}&locale=en&types[]=airport`
     )
     const arr = Array.isArray(g.json) ? g.json : []
-    const pick =
-        arr.find((p) => p.type === "city" && p.code) ||
-        arr.find((p) => p.code)
-    return pick?.code || null
+    const airports = [
+        ...new Set(arr.filter((p) => p.code).map((p) => p.code)),
+    ].slice(0, 3)
+    if (airports.length) return airports
+    const g2 = await safeGet(
+        `https://autocomplete.travelpayouts.com/places2?term=${encodeURIComponent(
+            q
+        )}&locale=en&types[]=city`
+    )
+    const arr2 = Array.isArray(g2.json) ? g2.json : []
+    const city = arr2.find((p) => p.code)
+    return city ? [city.code] : []
 }
-async function resolveIATA(term) {
+async function resolveCodes(term) {
     if (!term) return null
     const t = String(term).trim()
-    if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase()
-    if (iataCache[t]) return iataCache[t]
+    if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase() // already an airport code
+    if (codeCache[t]) return codeCache[t]
     const q = t.split(",")[0].trim()
-    let code = await lookupCode(q)
-    if (!code && /\bcity\b/i.test(q))
-        code = await lookupCode(q.replace(/\s*city\s*$/i, "").trim())
-    if (code) iataCache[t] = code
-    return code
+    let codes = await airportsFor(q)
+    if (!codes.length && /\bcity\b/i.test(q))
+        codes = await airportsFor(q.replace(/\s*city\s*$/i, "").trim())
+    const joined = codes.length ? codes.join(",") : null
+    if (joined) codeCache[t] = joined
+    return joined
 }
 
-// Real flight facts for one route via SerpApi Google Flights.
-async function routeInfo(depCode, arrCode, depMonth, retMonth) {
-    if (!depCode || !arrCode || !depMonth)
+async function routeInfo(depCodes, arrCodes, depMonth, retMonth) {
+    if (!depCodes || !arrCodes || !depMonth)
         return { found: false, reason: "missing codes" }
     const params = new URLSearchParams({
         engine: "google_flights",
-        departure_id: depCode,
-        arrival_id: arrCode,
+        departure_id: depCodes,
+        arrival_id: arrCodes,
         outbound_date: `${depMonth}-15`,
         ...(retMonth ? { return_date: `${retMonth}-18` } : {}),
         currency: "USD",
@@ -67,7 +75,6 @@ async function routeInfo(depCode, arrCode, depMonth, retMonth) {
         ...(Array.isArray(g.json?.other_flights) ? g.json.other_flights : []),
     ]
     if (!flights.length) return { found: false, status: g.status }
-
     const priced = flights.filter(
         (f) => typeof f.price === "number" && f.price > 0
     )
@@ -77,7 +84,6 @@ async function routeInfo(depCode, arrCode, depMonth, retMonth) {
         .filter((n) => typeof n === "number" && n > 0)
     const fastestMin = durations.length ? Math.min(...durations) : null
     const stopsOf = (f) => (Array.isArray(f.flights) ? f.flights.length - 1 : null)
-
     return {
         found: true,
         cheapestPrice:
@@ -107,26 +113,26 @@ export default async function handler(req, res) {
             req.body || {}
         const depMonth = departureDate ? String(departureDate).slice(0, 7) : null
         const retMonth = returnDate ? String(returnDate).slice(0, 7) : null
-        const originCode = await resolveIATA(origin)
+        const originCodes = await resolveCodes(origin)
 
         const results = await Promise.all(
             candidates.map(async (c) => {
-                const destinationCode = await resolveIATA(c?.destination)
+                const destinationCodes = await resolveCodes(c?.destination)
                 return {
                     id: c?.id,
                     destination: c?.destination,
-                    originCode,
-                    destinationCode,
+                    originCodes,
+                    destinationCodes,
                     ...(await routeInfo(
-                        originCode,
-                        destinationCode,
+                        originCodes,
+                        destinationCodes,
                         depMonth,
                         retMonth
                     )),
                 }
             })
         )
-        return res.status(200).json({ originCode, results })
+        return res.status(200).json({ originCodes, results })
     } catch (err) {
         return res.status(500).json({ error: err.message })
     }
