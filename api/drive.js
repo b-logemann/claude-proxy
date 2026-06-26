@@ -15,6 +15,13 @@ function setCors(res) {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type")
 }
 
+// Bare 3-letter airport codes (e.g. "ORD") don't geocode as driving origins —
+// expand them so Google resolves the airport instead of returning NOT_FOUND.
+function normalizeOrigin(o) {
+    const t = String(o || "").trim()
+    return /^[A-Za-z]{3}$/.test(t) ? `${t} Airport` : t
+}
+
 export default async function handler(req, res) {
     setCors(res)
     if (req.method === "OPTIONS") return res.status(200).end()
@@ -37,7 +44,7 @@ export default async function handler(req, res) {
             .join("|")
         const url =
             "https://maps.googleapis.com/maps/api/distancematrix/json" +
-            `?origins=${encodeURIComponent(origin)}` +
+            `?origins=${encodeURIComponent(normalizeOrigin(origin))}` +
             `&destinations=${destParam}` +
             `&mode=driving&units=imperial&key=${GOOGLE_KEY}`
 
