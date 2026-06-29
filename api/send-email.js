@@ -16,7 +16,7 @@ export default async function handler(req, res) {
         todoList,
         packingListHTML,
         budgetHTML,
-        bookingLinksHTML,
+        reservationsHTML,
         destination,
         tripType,
         tripTiming,
@@ -125,6 +125,18 @@ export default async function handler(req, res) {
               : ""
       }
 
+      <!-- Reservations & Bookings -->
+      ${
+          reservationsHTML
+              ? `
+      <div style="margin-bottom:48px;">
+        <p style="font-family:Helvetica Neue,sans-serif;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${brandGreen};margin:0 0 20px;border-bottom:1px solid rgba(38,78,51,0.2);padding-bottom:10px;">Reservations &amp; Bookings</p>
+        ${reservationsHTML}
+      </div>
+      `
+              : ""
+      }
+
       <!-- Footer -->
       <div style="border-top:1px solid rgba(38,78,51,0.2);padding-top:32px;text-align:center;">
         <p style="font-family:Georgia,serif;font-size:22px;font-weight:300;color:${brandGreen};margin:0 0 8px;">The Away Edit</p>
@@ -196,8 +208,11 @@ export default async function handler(req, res) {
     // 2) ADMIN copy — keeps every booking link + the planning checklist.
     const adminDoc = docWrap(
         `<h1>${safe(itineraryTitle) || "Your Trip"} — Planning Copy</h1>${metaLine ? `<p class="meta">${metaLine}</p>` : ""}` +
+            (reservationsHTML
+                ? `<h2>Reservations &amp; Bookings</h2>${safe(reservationsHTML)}`
+                : "") +
             (todoList ? `<h2>Planning Checklist</h2>${safe(todoList)}` : "") +
-            `<h2>Itinerary with Booking Links</h2>${safe(chosenItineraryHTML)}`
+            `<h2>Itinerary</h2>${safe(chosenItineraryHTML)}`
     )
 
     // 3) BUDGET — Excel-openable .xls.
