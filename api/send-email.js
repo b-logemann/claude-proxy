@@ -1,12 +1,9 @@
 // api/send-email.js
+import { withGuard } from "./_guard.js"
+
 export const maxDuration = 60
 
-export default async function handler(req, res) {
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
-
-    if (req.method === "OPTIONS") return res.status(200).end()
+async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).end()
 
     const {
@@ -27,6 +24,29 @@ export default async function handler(req, res) {
 
     if (!email) {
         return res.status(400).json({ error: "Missing email address" })
+    }
+
+    if (process.env.TURNSTILE_SECRET_KEY) {
+        const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim()
+        const verify = await fetch(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({
+                    secret: process.env.TURNSTILE_SECRET_KEY,
+                    response: req.body?.turnstileToken || "",
+                    ...(ip ? { remoteip: ip } : {}),
+                }),
+            }
+        )
+        const outcome = await verify.json()
+        if (!outcome.success)
+            return res
+                .status(403)
+                .json({ error: "Verification failed. Please try again." })
     }
 
     const brandGreen = "rgb(38, 78, 51)"
@@ -264,3 +284,9 @@ export default async function handler(req, res) {
         res.status(500).json({ error: err.message || "Unexpected error" })
     }
 }
+
+export default withGuard(handler, {
+    limit: 3,
+    windowSec: 3600,
+    prefix: "email",
+})
