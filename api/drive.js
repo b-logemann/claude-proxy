@@ -2,42 +2,29 @@
 // Given an origin + candidate destinations, returns driving time, distance, and
 // a rough round-trip fuel estimate per car, mirroring /api/feasibility (flights).
 // Per-person math is done client-side (it knows the group size).
+import { withGuard } from "./_guard.js"
 
 const GOOGLE_KEY = process.env.GOOGLE_MAPS_KEY
-
 // Tunable fuel assumptions (US averages). Change in one place.
 const MPG = 25
 const FUEL_PRICE_PER_GALLON = 3.5
-
-function setCors(res) {
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
-}
-
 // Bare 3-letter airport codes (e.g. "ORD") don't geocode as driving origins —
 // expand them so Google resolves the airport instead of returning NOT_FOUND.
 function normalizeOrigin(o) {
     const t = String(o || "").trim()
     return /^[A-Za-z]{3}$/.test(t) ? `${t} Airport` : t
 }
-
-export default async function handler(req, res) {
-    setCors(res)
-    if (req.method === "OPTIONS") return res.status(200).end()
+async function handler(req, res) {
     if (req.method !== "POST")
         return res.status(405).json({ error: "Method not allowed" })
-
     try {
         if (!GOOGLE_KEY)
             return res.status(500).json({ error: "Missing GOOGLE_MAPS_KEY" })
-
         const { origin, candidates } = req.body || {}
         if (!origin || !Array.isArray(candidates) || candidates.length === 0)
             return res
                 .status(400)
                 .json({ error: "origin and candidates[] are required" })
-
         // 1 origin × N destinations — well within Distance Matrix limits.
         const destParam = candidates
             .map((c) => encodeURIComponent(c.destination))
@@ -47,11 +34,9 @@ export default async function handler(req, res) {
             `?origins=${encodeURIComponent(normalizeOrigin(origin))}` +
             `&destinations=${destParam}` +
             `&mode=driving&units=imperial&key=${GOOGLE_KEY}`
-
         const apiRes = await fetch(url)
         const data = await apiRes.json()
         const elements = data?.rows?.[0]?.elements || []
-
         const results = candidates.map((c, i) => {
             const el = elements[i]
             if (!el || el.status !== "OK") return { id: c.id, found: false }
@@ -68,7 +53,6 @@ export default async function handler(req, res) {
                 fuelCostTotal, // per vehicle, round-trip — divided per person client-side
             }
         })
-
         return res.status(200).json({ results })
     } catch (err) {
         return res
@@ -76,3 +60,5 @@ export default async function handler(req, res) {
             .json({ error: String((err && err.message) || err) })
     }
 }
+
+export default withGuard(handler, { prefix: "drive" })
