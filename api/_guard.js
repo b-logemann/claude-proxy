@@ -7,7 +7,7 @@ const ALLOWED_ORIGINS = new Set([
     "https://www.theawayeditco.com",
 ])
 // Framer editor/preview — keep while building in Framer, remove to fully lock down.
-const ALLOWED_SUFFIXES = [".framer.app", ".framer.website"]
+const ALLOWED_SUFFIXES = [".framer.app", ".framer.website", ".framercanvas.com"]
 // TEMPORARY — Framer editor/canvas origins for testing. Remove before launch.
 const ALLOWED_EXACT_TEST = new Set([
     "https://framer.com",
