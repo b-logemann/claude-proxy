@@ -3,8 +3,8 @@ import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
 
 const ALLOWED_ORIGINS = new Set([
-    "https://theawayeditco.com",
-    "https://www.theawayeditco.com",
+    "https://theawayedit.com",
+    "https://www.theawayedit.com",
 ])
 // Framer editor/preview — keep while building in Framer, remove to fully lock down.
 const ALLOWED_SUFFIXES = [".framer.app", ".framer.website", ".framercanvas.com"]
@@ -28,7 +28,7 @@ function isAllowed(origin) {
 
 function applyCors(req, res) {
     const origin = req.headers.origin
-    const allow = isAllowed(origin) ? origin : "https://theawayeditco.com"
+    const allow = isAllowed(origin) ? origin : "https://theawayedit.com"
     res.setHeader("Access-Control-Allow-Origin", allow)
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     res.setHeader("Access-Control-Allow-Headers", "Content-Type")
