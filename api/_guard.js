@@ -8,10 +8,16 @@ const ALLOWED_ORIGINS = new Set([
 ])
 // Framer editor/preview — keep while building in Framer, remove to fully lock down.
 const ALLOWED_SUFFIXES = [".framer.app", ".framer.website"]
+// TEMPORARY — Framer editor/canvas origins for testing. Remove before launch.
+const ALLOWED_EXACT_TEST = new Set([
+    "https://framer.com",
+    "https://www.framer.com",
+])
 
 function isAllowed(origin) {
     if (!origin) return false
     if (ALLOWED_ORIGINS.has(origin)) return true
+    if (ALLOWED_EXACT_TEST.has(origin)) return true
     try {
         const host = new URL(origin).hostname
         return ALLOWED_SUFFIXES.some((s) => host.endsWith(s))
