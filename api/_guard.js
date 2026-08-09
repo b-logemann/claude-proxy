@@ -18,6 +18,8 @@ const ALLOWED_EXACT_TEST = new Set([
 
 function isAllowed(origin) {
     if (!origin) return false
+    // TEMPORARY — allow a double-clicked local file (origin "null"). Remove before launch.
+    if (origin === "null") return true
     if (ALLOWED_ORIGINS.has(origin)) return true
     if (ALLOWED_EXACT_TEST.has(origin)) return true
     try {
