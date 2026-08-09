@@ -1,3 +1,10 @@
+export default async function handler(req, res) {
+  // ── CORS: allow calls from anywhere (add these 4 lines) ──
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
+
 // api/_guard.js — CORS allowlist + Upstash rate limiting for (req,res) handlers.
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
@@ -96,4 +103,5 @@ export function withGuard(handler, opts = {}) {
 
         return handler(req, res)
     }
+}
 }
