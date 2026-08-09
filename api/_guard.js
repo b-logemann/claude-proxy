@@ -1,10 +1,3 @@
-export default async function handler(req, res) {
-  // ── CORS: allow calls from anywhere (add these 4 lines) ──
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
-
 // api/_guard.js — CORS allowlist + Upstash rate limiting for (req,res) handlers.
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
@@ -13,8 +6,10 @@ const ALLOWED_ORIGINS = new Set([
     "https://theawayedit.com",
     "https://www.theawayedit.com",
 ])
+
 // Framer editor/preview — keep while building in Framer, remove to fully lock down.
 const ALLOWED_SUFFIXES = [".framer.app", ".framer.website", ".framercanvas.com"]
+
 // TEMPORARY — Framer editor/canvas origins for testing. Remove before launch.
 const ALLOWED_EXACT_TEST = new Set([
     "https://framer.com",
@@ -27,6 +22,8 @@ function isAllowed(origin) {
     if (ALLOWED_EXACT_TEST.has(origin)) return true
     try {
         const host = new URL(origin).hostname
+        // TEMPORARY — allow local testing (localhost / 127.0.0.1, any port). Remove before launch.
+        if (host === "localhost" || host === "127.0.0.1") return true
         return ALLOWED_SUFFIXES.some((s) => host.endsWith(s))
     } catch {
         return false
@@ -70,17 +67,13 @@ export function withGuard(handler, opts = {}) {
     const limit = opts.limit ?? 30
     const windowSec = opts.windowSec ?? 60
     const prefix = opts.prefix ?? "general"
-
     return async function guarded(req, res) {
         const origin = applyCors(req, res)
-
         if (req.method === "OPTIONS") return res.status(204).end()
-
         // Block browser calls from disallowed origins. Requests with no Origin
         // (server-to-server, curl) pass through — tighten if you want.
         if (origin && !isAllowed(origin))
             return res.status(403).json({ error: "Origin not allowed" })
-
         const limiter = getLimiter(limit, windowSec, prefix)
         if (limiter) {
             const ip =
@@ -100,8 +93,6 @@ export function withGuard(handler, opts = {}) {
                     .json({ error: "Too many requests. Please slow down." })
             }
         }
-
         return handler(req, res)
     }
-}
 }
