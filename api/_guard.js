@@ -178,4 +178,60 @@ export function withGuard(handler, opts = {}) {
             return res.status(403).json({ error: "Origin not allowed" })
         }
 
-        if (!redis
+        if (!redis && requireLimiter) {
+            console.error(
+                `[guard] ${prefix}: refusing to serve - rate limiter unavailable`
+            )
+            return res
+                .status(503)
+                .json({ error: "Service temporarily unavailable" })
+        }
+
+        const ipLimiter = getLimiter(limit, windowSec, prefix)
+        const capLimiter = getDailyCap(dailyCap, prefix)
+
+        if (ipLimiter || capLimiter) {
+            try {
+                if (capLimiter) {
+                    const g = await capLimiter.limit("global")
+                    if (!g.success) {
+                        console.error(
+                            `[guard] ${prefix}: DAILY CAP of ${dailyCap} reached`
+                        )
+                        return tooMany(
+                            res,
+                            g.reset,
+                            "This service is at capacity today. Please try again tomorrow."
+                        )
+                    }
+                }
+
+                if (ipLimiter) {
+                    const r = await ipLimiter.limit(clientIp(req))
+                    res.setHeader("X-RateLimit-Limit", String(r.limit))
+                    res.setHeader(
+                        "X-RateLimit-Remaining",
+                        String(Math.max(0, r.remaining))
+                    )
+                    res.setHeader("X-RateLimit-Reset", String(r.reset))
+                    if (!r.success)
+                        return tooMany(
+                            res,
+                            r.reset,
+                            "Too many requests. Please slow down."
+                        )
+                }
+            } catch (err) {
+                // An Upstash outage should not take down every endpoint at
+                // once. Paid routes fail closed; free ones carry on.
+                console.error(`[guard] ${prefix}: limiter error`, err)
+                if (requireLimiter)
+                    return res
+                        .status(503)
+                        .json({ error: "Service temporarily unavailable" })
+            }
+        }
+
+        return handler(req, res)
+    }
+}
