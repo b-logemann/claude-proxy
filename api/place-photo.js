@@ -2,11 +2,13 @@
 // text query, resolves its first photo to a key-free googleusercontent URL,
 // and 302-redirects the <img> straight to it. Cached in-memory per query to
 // keep Places billing down across repeat loads (resets on cold start).
+import { withGuard } from "./_guard.js"
+
 const KEY = process.env.GOOGLE_PLACES_API_KEY
 const cache = new Map() // query -> { url: string|null, ts: number }
 const TTL = 1000 * 60 * 60 * 24 // 24h
 
-export default async function handler(req, res) {
+async function handler(req, res) {
     const query = (req.query.query || "").toString().trim()
     if (!query) {
         res.statusCode = 400
@@ -62,3 +64,28 @@ export default async function handler(req, res) {
         return send404()
     }
 }
+
+// This endpoint was previously unguarded entirely - no CORS, no rate limiting -
+// while billing Google Places on every miss. Three deliberate choices here:
+//
+//   requireOrigin: false  - MUST be false. This is consumed as <img src> and as
+//                           a CSS background-image, neither of which sends an
+//                           Origin header. Set it true and every photo 403s.
+//
+//   limit: 150/60s        - deliberately generous. One trip page is a hero plus
+//                           ~25 thumbnails, so a single page view is 25-30 calls.
+//                           A tight per-IP limit here blocks your own users, not
+//                           attackers. Browser caching (max-age=86400) and the
+//                           in-memory cache above both reduce repeat traffic.
+//
+//   requireLimiter: false - a Redis outage should not break every image on the
+//                           site. Photos are cosmetic and individually cheap;
+//                           dailyCap is what bounds the Places bill.
+export default withGuard(handler, {
+    prefix: "place-photo",
+    limit: 150,
+    windowSec: 60,
+    dailyCap: 5000,
+    requireOrigin: false,
+    requireLimiter: false,
+})
