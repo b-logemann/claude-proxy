@@ -637,18 +637,21 @@ async function handler(req, res) {
             (packingHtml ? `<h2>Packing List</h2>${packingHtml}` : "")
     )
 
-    // 2) Planning copy - booking links (markers stripped) plus the checklist.
+    // 2) Planning copy - the booking list and nothing else.
+    //    It used to repeat the whole itinerary underneath, which made the two
+    //    attachments near-duplicates of each other: the guest copy already IS
+    //    the itinerary, and someone working through booking links does not
+    //    want to scroll past fifteen days to reach them.
     const adminDoc = docWrap(
-        `<h1>${esc(title)} - Planning Copy</h1>${metaPlain}` +
-            (bookingsHtml ? `<h2>Reservations &amp; Bookings</h2>${bookingsHtml}` : "") +
-            (checklistHtml ? `<h2>Planning Checklist</h2>${checklistHtml}` : "") +
-            `<h2>Itinerary</h2>${itinHtml}`
+        `<h1>${esc(title)} - Booking Links</h1>${metaPlain}` +
+            (bookingsHtml ? bookingsHtml : "") +
+            (checklistHtml ? `<h2>Planning Checklist</h2>${checklistHtml}` : "")
     )
 
     const attachments = [
         { filename: `${fileBase} - Itinerary.doc`, content: toB64(guestDoc) },
         {
-            filename: `${fileBase} - Planning and Booking Links.doc`,
+            filename: `${fileBase} - Booking Links.doc`,
             content: toB64(adminDoc),
         },
     ]
