@@ -17,7 +17,12 @@
 // its own sender.
 //
 // ------------------------------------------------------------------
-// SECOND REVISION - the email is now ONE document, with no attachments.
+// SECOND REVISION - a short covering note plus three attachments.
+//
+// (An intermediate version put everything inline with no attachments; that
+// was reverted because a 21-day itinerary rendered inline exceeded Gmail's
+// 102KB clip threshold and was silently truncated mid-plan. The body is now
+// ~6KB regardless of trip length.)
 //
 // It used to send three: an itinerary .doc, a planning .doc, and a budget
 // .xls. Every one of them duplicated a section that was already in the email
@@ -202,10 +207,10 @@ const AFFILIATE_PARAMS = new Set([
 
 const MAX_SHORT = 300
 const MAX_LONG = 3000
-const MAX_DAYS = 31
+const MAX_DAYS = 62
 const MAX_SLOTS = 20
 const MAX_GROUPS = 15
-const MAX_ITEMS = 60
+const MAX_ITEMS = 160
 const MAX_LINKS = 4
 const MAX_ROWS = 40
 
@@ -338,7 +343,17 @@ function renderBookings(groups, opts) {
     const gs = arr(groups, MAX_GROUPS)
     if (!gs.length) return ""
 
-    const linkStyle = `font-family:${SANS};font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;color:${GREEN};text-decoration:none;border-bottom:1px solid ${G40};white-space:nowrap;margin-right:14px;`
+    // Same hierarchy as the Book It tab on the site: a real booking action is
+    // filled, a secondary option is outlined, and a Maps lookup is dashed --
+    // so the shape of the button says what the words say. The attachment used
+    // to render all three identically as underlined text.
+    const pill = `display:inline-block;font-family:${SANS};font-size:10px;letter-spacing:.09em;text-transform:uppercase;font-weight:600;text-decoration:none;padding:8px 13px;margin:0 8px 6px 0;`
+    const styleFor = (i, muted) =>
+        muted
+            ? `${pill}border:1px dashed ${RULE};color:${G60};font-weight:500;`
+            : i === 0
+              ? `${pill}background:${GREEN};color:${BEIGE};border:1px solid ${GREEN};`
+              : `${pill}border:1px solid ${RULE};color:${GREEN};`
 
     return gs
         .map((g) => {
@@ -351,22 +366,26 @@ function renderBookings(groups, opts) {
 
                     const links = withLinks
                         ? arr(it.links, MAX_LINKS)
-                              .map((l) => {
+                              .map((l, i) => {
                                   const url = linkUrl(l.url)
                                   const text = esc(str(l.text, 60))
                                   if (!url || !text) return ""
-                                  return `<a href="${esc(url)}" style="${linkStyle}">${text} &rarr;</a>`
+                                  const muted = l.muted === true
+                                  // The arrow earns its place on the action
+                                  // button only; on every chip it was noise.
+                                  const arrow = !muted && i === 0 ? " &rarr;" : ""
+                                  return `<a href="${esc(url)}" style="${styleFor(i, muted)}">${text}${arrow}</a>`
                               })
                               .filter(Boolean)
                               .join("")
                         : ""
 
                     const gap = links || detail || addr ? "5px" : "0"
-                    return `<div style="padding:9px 0;border-bottom:1px solid ${RULE_SOFT};font-family:${SANS};font-size:14px;color:${GREEN};page-break-inside:avoid;">
+                    return `<div style="padding:13px 0;border-bottom:1px solid ${RULE_SOFT};font-family:${SANS};font-size:14px;color:${GREEN};page-break-inside:avoid;">
                         <div style="font-weight:500;margin-bottom:${gap};">${label}</div>
                         ${detail ? `<div style="font-size:12px;font-weight:300;color:${G60};">${detail}</div>` : ""}
                         ${addr}
-                        ${links ? `<div style="margin-top:7px;">${links}</div>` : ""}
+                        ${links ? `<div style="margin-top:9px;">${links}</div>` : ""}
                     </div>`
                 })
                 .filter(Boolean)
@@ -543,33 +562,12 @@ async function handler(req, res) {
         return res.status(400).json({ error: "A valid email address is required" })
     }
 
-    if (process.env.TURNSTILE_SECRET_KEY) {
-        const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim()
-        try {
-            const verify = await fetch(
-                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                    body: new URLSearchParams({
-                        secret: process.env.TURNSTILE_SECRET_KEY,
-                        response: str(body.turnstileToken, 4000),
-                        ...(ip ? { remoteip: ip } : {}),
-                    }),
-                }
-            )
-            const outcome = await verify.json()
-            if (!outcome.success)
-                return res
-                    .status(403)
-                    .json({ error: "Verification failed. Please try again." })
-        } catch (err) {
-            console.error("[send-email] turnstile check failed", err)
-            return res
-                .status(503)
-                .json({ error: "Verification unavailable. Please try again." })
-        }
-    }
+    // NOTE: Turnstile enforcement was removed, not forgotten. The client has
+    // no widget and sends no token, so gating on TURNSTILE_SECRET_KEY meant
+    // that setting that variable silently broke email for everyone with no
+    // way to diagnose it. To re-enable: add the widget to AwayEdit.tsx, send
+    // `turnstileToken` in the payload, and restore the siteverify call here.
+    // Until then the rate limiter below (3/hour per IP, 100/day) is the guard.
 
     const trip = body.trip || {}
     const itin = body.itinerary || {}
