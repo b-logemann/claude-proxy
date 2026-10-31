@@ -288,8 +288,8 @@ function addressLine(raw, size) {
     const href =
         "https://www.google.com/maps/search/?api=1&query=" +
         encodeURIComponent(a)
-    return `<div style="font-family:${SANS};font-size:${px}px;color:${G55};margin-top:4px;">
-        <a href="${esc(href)}" style="color:${G55};text-decoration:none;border-bottom:1px solid ${RULE_SOFT};">${esc(a)}</a>
+    return `<div class="ae-soft" style="font-family:${SANS};font-size:${px}px;color:${G55};margin-top:4px;">
+        <a class="ae-soft ae-rule-soft" href="${esc(href)}" style="color:${G55};text-decoration:none;border-bottom:1px solid ${RULE_SOFT};">${esc(a)}</a>
     </div>`
 }
 
@@ -354,6 +354,14 @@ function renderBookings(groups, opts) {
             : i === 0
               ? `${pill}background:${GREEN};color:${BEIGE};border:1px solid ${GREEN};`
               : `${pill}border:1px solid ${RULE};color:${GREEN};`
+    // Dark-mode hooks. The filled pill keeps beige-on-green in both themes
+    // (ae-panel lifts the green), so only its border needs re-colouring.
+    const classFor = (i, muted) =>
+        muted
+            ? "ae-soft ae-rule"
+            : i === 0
+              ? "ae-panel ae-rule"
+              : "ae-ink ae-rule"
 
     return gs
         .map((g) => {
@@ -374,16 +382,19 @@ function renderBookings(groups, opts) {
                                   // The arrow earns its place on the action
                                   // button only; on every chip it was noise.
                                   const arrow = !muted && i === 0 ? " &rarr;" : ""
-                                  return `<a href="${esc(url)}" style="${styleFor(i, muted)}">${text}${arrow}</a>`
+                                  return `<a class="${classFor(i, muted)}" href="${esc(url)}" style="${styleFor(i, muted)}">${text}${arrow}</a>`
                               })
                               .filter(Boolean)
                               .join("")
                         : ""
 
+                    // A row the traveller already ticked arrives with no
+                    // links and a detail line starting with a check mark.
+                    const isDone = /^\s*\u2713/.test(str(it.detail, 80))
                     const gap = links || detail || addr ? "5px" : "0"
-                    return `<div style="padding:13px 0;border-bottom:1px solid ${RULE_SOFT};font-family:${SANS};font-size:14px;color:${GREEN};page-break-inside:avoid;">
-                        <div style="font-weight:500;margin-bottom:${gap};">${label}</div>
-                        ${detail ? `<div style="font-size:12px;font-weight:300;color:${G60};">${detail}</div>` : ""}
+                    return `<div class="ae-rule-soft" style="padding:13px 0;border-bottom:1px solid ${RULE_SOFT};font-family:${SANS};font-size:14px;color:${GREEN};page-break-inside:avoid;">
+                        <div class="${isDone ? "ae-soft" : "ae-ink"}" style="font-weight:500;margin-bottom:${gap};${isDone ? `color:${G60};` : ""}">${label}</div>
+                        ${detail ? `<div class="ae-soft" style="font-size:12px;font-weight:300;color:${G60};">${detail}</div>` : ""}
                         ${addr}
                         ${links ? `<div style="margin-top:9px;">${links}</div>` : ""}
                     </div>`
@@ -394,7 +405,7 @@ function renderBookings(groups, opts) {
             if (!rows) return ""
 
             return `<div style="margin-bottom:22px;">
-                <div style="font-family:${SANS};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${GREEN};border-bottom:1px solid ${RULE};padding-bottom:6px;margin-bottom:6px;">${esc(str(g.group, 120))}</div>
+                <div class="ae-ink ae-rule" style="font-family:${SANS};font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${GREEN};border-bottom:1px solid ${RULE};padding-bottom:6px;margin-bottom:6px;">${esc(str(g.group, 120))}</div>
                 ${rows}
             </div>`
         })
@@ -635,23 +646,10 @@ async function handler(req, res) {
             (packingHtml ? `<h2>Packing List</h2>${packingHtml}` : "")
     )
 
-    // 2) Planning copy - the booking list and nothing else.
-    //    It used to repeat the whole itinerary underneath, which made the two
-    //    attachments near-duplicates of each other: the guest copy already IS
-    //    the itinerary, and someone working through booking links does not
-    //    want to scroll past fifteen days to reach them.
-    const adminDoc = docWrap(
-        `<h1>${esc(title)} - Booking Links</h1>${metaPlain}` +
-            (bookingsHtml ? bookingsHtml : "") +
-            (checklistHtml ? `<h2>Planning Checklist</h2>${checklistHtml}` : "")
-    )
-
+    // The booking list is NOT an attachment any more -- it is in the body,
+    // where a link is a link. Only the itinerary and the budget are files.
     const attachments = [
         { filename: `${fileBase} - Itinerary.doc`, content: toB64(guestDoc) },
-        {
-            filename: `${fileBase} - Booking Links.doc`,
-            content: toB64(adminDoc),
-        },
     ]
 
     // 3) Budget - Excel-openable .xls.
@@ -670,11 +668,12 @@ async function handler(req, res) {
     // Name the files in the covering note, so nobody has to open one to find
     // out which is which.
     const attachmentBlurb =
-        attachments.length === 3
-            ? "Three files: the itinerary to share with whoever is coming, a planning copy with every booking link, and the budget as a spreadsheet."
-            : "The itinerary to share with whoever is coming, and a planning copy with every booking link."
+        attachments.length === 2
+            ? "Two files are attached: the full day-by-day to share with whoever is coming, and the budget as a spreadsheet."
+            : "The full day-by-day is attached, to share with whoever is coming."
 
     const note = `font-family:${SANS};font-size:14px;line-height:1.75;color:${G80};margin:0 0 16px;`
+    const eyebrow = `font-family:${SANS};font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${GREEN};margin:0 0 14px;border-bottom:1px solid ${RULE};padding-bottom:10px;`
 
     const emailHTML = `<!DOCTYPE html>
 <html>
@@ -713,9 +712,14 @@ async function handler(req, res) {
     ${headlineHtml}
 
     <div style="padding:34px 40px 40px;">
-      <p class="ae-ink" style="${note}">Your trip is attached. ${attachmentBlurb}</p>
-      <p class="ae-ink" style="${note}">Every booking is yours to make &#8212; The Away Edit reserves nothing on your behalf, so check prices, opening hours and availability before you commit to anything.</p>
-      <p class="ae-soft" style="font-family:${SANS};font-size:13px;line-height:1.7;color:${G60};margin:0 0 34px;">Happy travels.</p>
+      <p class="ae-ink" style="${note}">${attachmentBlurb} What still needs arranging is below &#8212; in the order that keeps it from selling out from under you.</p>
+      <p class="ae-soft" style="font-family:${SANS};font-size:13px;line-height:1.7;color:${G60};margin:0 0 34px;">Every booking is yours to make. The Away Edit reserves nothing on your behalf, so check prices, opening hours and availability before you commit.</p>
+
+      ${
+          bookingsHtml
+              ? `<p class="ae-ink ae-rule" style="${eyebrow}">What to book</p>${bookingsHtml}<div style="height:18px"></div>`
+              : ""
+      }
 
       ${renderFooter()}
     </div>
