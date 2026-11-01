@@ -64,12 +64,27 @@ export const maxDuration = 60
 const GREEN = "rgb(38, 78, 51)"
 const BEIGE = "rgb(249, 247, 239)"
 
-const G80 = "rgba(38,78,51,.8)"
-const G75 = "rgba(38,78,51,.75)"
-const G60 = "rgba(38,78,51,.6)"
-const G55 = "rgba(38,78,51,.55)"
-const G50 = "rgba(38,78,51,.5)"
-const G40 = "rgba(38,78,51,.4)"
+// All six of these are TEXT colours -- verified, every one appears only as
+// `color:`, never a border or a background. On this beige nothing below 78%
+// opacity clears WCAG AA: the floor is 74.7% on plain beige and 77.5% on the
+// tinted headline panel, which is the stricter of the two.
+//
+// Measured before this change, in LIGHT mode: 19 of 38 text elements passed.
+// Body copy at .6 was 3.15:1 and the footer disclosure at .4 was 2.04:1.
+// Dark mode was already fine at 37/38, which is why this went unnoticed --
+// cream on near-black has far more headroom than green on beige.
+//
+// So there is exactly ONE secondary text colour available here, not five.
+// The names are kept because the call sites read better with them, but they
+// are deliberately the same value. If you want less emphasis, reach for size
+// or weight, NOT opacity -- opacity is what broke this.
+const SOFT = "rgba(38,78,51,.8)"
+const G80 = SOFT
+const G75 = SOFT
+const G60 = SOFT
+const G55 = SOFT
+const G50 = SOFT
+const G40 = SOFT
 const RULE = "rgba(38,78,51,.3)"
 const RULE_SOFT = "rgba(38,78,51,.1)"
 const WASH = "rgba(38,78,51,.07)"
@@ -96,7 +111,9 @@ const D_BG = "#121a14"          // near-black, green-biased
 const D_PANEL = "rgb(31,64,42)" // masthead: lifted so it reads as a block
 const D_INK = "rgb(240,237,226)"
 const D_INK_SOFT = "rgba(240,237,226,.62)"
-const D_INK_FAINT = "rgba(240,237,226,.42)"
+// 3.52:1 at .42 on the washed panel, which is the footer disclosure.
+// The floor for AA on that background is .510.
+const D_INK_FAINT = "rgba(240,237,226,.58)"
 const D_RULE = "rgba(240,237,226,.22)"
 const D_RULE_SOFT = "rgba(240,237,226,.12)"
 const D_WASH = "rgba(240,237,226,.06)"
@@ -458,6 +475,18 @@ function renderBudget(budget) {
 // The headline number, directly under the masthead. This is the first question
 // anyone forwarded this email asks, and it used to sit at the very bottom
 // under a table they had to read in order to answer it.
+// budgetPerPerson arrives as whatever was typed at intake, usually bare digits
+// like "3550". Every other figure in this email is formatted, so printing it
+// raw read like a typo sitting next to "$2,462". Anything that already carries
+// a currency mark or words is left exactly as the traveller wrote it.
+function moneyish(v) {
+    const s = String(v == null ? "" : v).trim()
+    if (!s || /[^\d.,\s]/.test(s)) return s
+    const n = Number(s.replace(/[,\s]/g, ""))
+    if (!isFinite(n) || n <= 0) return s
+    return "$" + Math.round(n).toLocaleString("en-US")
+}
+
 function renderHeadline(budget, trip) {
     const t = budget && budget.total
     const amount = esc(str(t && t.amount, 40))
@@ -468,7 +497,7 @@ function renderHeadline(budget, trip) {
     return `<div class="ae-wash" style="background:${WASH};padding:28px 40px;text-align:center;">
         <div class="ae-soft" style="font-family:${SANS};font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:${G55};margin-bottom:8px;">${label}</div>
         <div class="ae-ink" style="font-family:${SERIF};font-size:38px;font-weight:300;color:${GREEN};line-height:1;">${amount}</div>
-        ${per ? `<div class="ae-soft" style="font-family:${SANS};font-size:12px;color:${G60};margin-top:10px;">Your budget was ${esc(per)} per person</div>` : ""}
+        ${per ? `<div class="ae-soft" style="font-family:${SANS};font-size:12px;color:${G60};margin-top:10px;">Your budget was ${esc(moneyish(per))} per person</div>` : ""}
     </div>`
 }
 
@@ -692,7 +721,7 @@ async function handler(req, res) {
   <div class="ae-bg" style="max-width:640px;margin:0 auto;padding:0;background-color:${BEIGE};">
 
     <div class="ae-panel" style="background:${GREEN};padding:48px 40px 40px;text-align:center;">
-      <p style="font-family:${SANS};font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:rgba(249,247,239,0.6);margin:0 0 12px;">Your Curated Itinerary</p>
+      <p style="font-family:${SANS};font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:rgba(249,247,239,0.72);margin:0 0 12px;">Your Curated Itinerary</p>
       <h1 style="font-family:${SERIF};font-weight:300;font-size:42px;color:${BEIGE};margin:0;letter-spacing:0.04em;">The Away Edit</h1>
     </div>
 
