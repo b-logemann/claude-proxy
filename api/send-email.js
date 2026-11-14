@@ -702,6 +702,17 @@ async function handler(req, res) {
             total: t ? { label: str(t.label, MAX_SHORT), amount: str(t.amount, 40) } : null,
             budgetLine: per ? `Your budget was ${moneyish(per)} per person` : "",
             bookFirst: firstLabel,
+            budget: body.budget
+                ? {
+                      rows: arr(body.budget.rows, MAX_ROWS).map((r) => ({
+                          label: str(r && r.label, MAX_SHORT),
+                          amount: str(r && r.amount, 40),
+                          note: str(r && r.note, 60),
+                      })),
+                      total: t ? { label: str(t.label, MAX_SHORT), amount: str(t.amount, 40) } : null,
+                      footnote: str(body.budget.footnote, MAX_LONG),
+                  }
+                : null,
             days: arr(itin.days, MAX_DAYS).map((d) => ({
                 title: str(d && d.title, 120),
                 slots: arr(d && d.slots, MAX_SLOTS).map((x) => ({
