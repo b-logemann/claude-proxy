@@ -49,6 +49,7 @@
 // ------------------------------------------------------------------
 
 import { withGuard } from "./_guard.js"
+import { buildTripPdf } from "./_trip-pdf.js"
 
 export const maxDuration = 60
 
@@ -201,7 +202,8 @@ const AFFILIATE_PARAMS = new Set([
  *     title, subtitle, summary,
  *     days: [{
  *       title: "Day 1 - Arrival",
- *       slots: [{ time, title, detail, cost, address? }]
+ *       slots: [{ time, title, detail, cost, address?,
+ *                 area?, booked?, url?, linkText? }]   // Nov 2026, for the PDF
  *     }]
  *   },
  *   bookings: [{ group: "(1) Flights", items: [
@@ -677,9 +679,51 @@ async function handler(req, res) {
 
     // The booking list is NOT an attachment any more -- it is in the body,
     // where a link is a link. Only the itinerary and the budget are files.
-    const attachments = [
-        { filename: `${fileBase} - Itinerary.doc`, content: toB64(guestDoc) },
-    ]
+    //
+    // Nov 2026: the itinerary is now a real PDF (same layout as "Save as PDF"
+    // on the trip page), because phones open .doc badly or not at all. Built
+    // from the same capped, plain-text data; links go through linkUrl(). If
+    // the PDF cannot be built for any reason, the old .doc is sent instead so
+    // the email never goes out empty-handed.
+    const attachments = []
+    try {
+        const bookGroups = arr(body.bookings, MAX_GROUPS)
+        const first = bookGroups.find((g) => /book these first/i.test(str(g && g.group, 120)))
+        const firstLabel = first ? str(arr(first.items, 1)[0] && arr(first.items, 1)[0].label, MAX_SHORT) : ""
+        const t = body.budget && body.budget.total
+        const per = str(trip.budgetPerPerson, 30)
+        const pdf = await buildTripPdf({
+            title,
+            subtitle,
+            meta: [
+                str(trip.tripType),
+                trip.numberOfPeople ? `${str(trip.numberOfPeople, 20)} travelers` : "",
+            ].filter(Boolean).join(" \u00b7 "),
+            total: t ? { label: str(t.label, MAX_SHORT), amount: str(t.amount, 40) } : null,
+            budgetLine: per ? `Your budget was ${moneyish(per)} per person` : "",
+            bookFirst: firstLabel,
+            days: arr(itin.days, MAX_DAYS).map((d) => ({
+                title: str(d && d.title, 120),
+                slots: arr(d && d.slots, MAX_SLOTS).map((x) => ({
+                    time: str(x && x.time, 60),
+                    title: str(x && x.title, MAX_SHORT),
+                    detail: str(x && x.detail, MAX_LONG),
+                    cost: str(x && x.cost, 80),
+                    area: str(x && x.area, 80),
+                    booked: !!(x && x.booked === true),
+                    url: (x && linkUrl(x.url)) || "",
+                    linkText: str(x && x.linkText, 40),
+                })),
+            })),
+        })
+        attachments.push({
+            filename: `${fileBase} - Itinerary.pdf`,
+            content: Buffer.from(pdf).toString("base64"),
+        })
+    } catch (err) {
+        console.error("[send-email] pdf failed, sending .doc", err)
+        attachments.push({ filename: `${fileBase} - Itinerary.doc`, content: toB64(guestDoc) })
+    }
 
     // 3) Budget - Excel-openable .xls.
     if (budgetHtml) {
@@ -698,8 +742,8 @@ async function handler(req, res) {
     // out which is which.
     const attachmentBlurb =
         attachments.length === 2
-            ? "Two files are attached: the full day-by-day to share with whoever is coming, and the budget as a spreadsheet."
-            : "The full day-by-day is attached, to share with whoever is coming."
+            ? "Two files are attached: your day-by-day as a PDF to share with whoever is coming, and the budget as a spreadsheet."
+            : "Your day-by-day is attached as a PDF, to share with whoever is coming."
 
     const note = `font-family:${SANS};font-size:14px;line-height:1.75;color:${G80};margin:0 0 16px;`
     const eyebrow = `font-family:${SANS};font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${GREEN};margin:0 0 14px;border-bottom:1px solid ${RULE};padding-bottom:10px;`
