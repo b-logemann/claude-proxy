@@ -98,6 +98,8 @@ function addLink(doc, page, x, y, w, h, url) {
  *   title, subtitle, meta,                 // strings
  *   total: { label, amount }, budgetLine,  // strings
  *   bookFirst: "Flights . Hotel . ...",    // string or ""
+ *   budget: { rows: [{ label, amount, note }], total: { label, amount },
+ *             footnote },                  // the full breakdown, at the end
  *   days: [{ title, slots: [{ time, title, detail, cost, area, booked,
  *                             url, linkText }] }]   // url already checked
  * }
@@ -249,6 +251,46 @@ export async function buildTripPdf(data) {
             y = Math.min(y, top - l.h + 8) - 8
         })
         y -= 10
+    }
+
+    // ---- the full budget breakdown (Nov 2026) ----
+    const b = data.budget
+    const brows = ((b && b.rows) || []).filter((r) => clean(r && r.label))
+    if (brows.length) {
+        const amtW = 90
+        const foot = b.footnote ? wrap(b.footnote, sans, 8.5, W - 2 * M) : []
+        const blockH = 40 + brows.length * 20 + (b.total ? 30 : 0) + foot.length * 11 + 10
+        ensure(blockH)
+        y -= 6
+        page.drawLine({ start: { x: M, y: y + 10 }, end: { x: W - M, y: y + 10 }, thickness: 0.8, color: RULE })
+        y -= 6
+        text("THE BUDGET", M, 8.5, bold, GREEN)
+        const head = "PER PERSON"
+        page.drawText(head, { x: W - M - bold.widthOfTextAtSize(head, 7), y, size: 7, font: bold, color: SOFT })
+        y -= 20
+        const right = (t, size, font, color) => {
+            const s2 = clean(t)
+            page.drawText(s2, { x: W - M - font.widthOfTextAtSize(s2, size), y, size, font, color })
+        }
+        brows.forEach((r) => {
+            const lw = text(r.label, M, 10, sans, GREEN)
+            if (clean(r.note)) text(caps(r.note), M + lw + 8, 6.5, bold, SOFT)
+            right(r.amount, 10, sans, GREEN)
+            page.drawLine({ start: { x: M, y: y - 6 }, end: { x: W - M, y: y - 6 }, thickness: 0.4, color: RULE })
+            y -= 20
+        })
+        if (b.total && clean(b.total.amount)) {
+            page.drawLine({ start: { x: M, y: y + 12 }, end: { x: W - M, y: y + 12 }, thickness: 1.4, color: GREEN })
+            y -= 4
+            const tl = wrap(b.total.label || "Total", bold, 10.5, W - 2 * M - amtW)[0] || "Total"
+            text(tl, M, 10.5, bold, GREEN)
+            right(b.total.amount, 12, bold, GREEN)
+            y -= 22
+        }
+        foot.forEach((l) => {
+            text(l, M, 8.5, sans, SOFT)
+            y -= 11
+        })
     }
 
     // ---- footer on every page ----
