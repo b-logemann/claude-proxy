@@ -6,6 +6,7 @@
 //
 //   { op: "put",      slot: "<slot key>", id: "<spare id>" }   swap a spare in
 //   { op: "remove",   slot: "<slot key>" }                      take it out
+//   { op: "move",     slot: "<slot key>", day: <n> }            move it to another day
 //   { op: "dayPace",  day: <n>, pace: 0|1|2 }                   one day busier/easier
 //   { op: "dial",     dial: "pace"|"food"|"spend", value: 0|1|2 }
 //
@@ -48,6 +49,7 @@ Reply with ONLY a JSON object, no prose around it:
 Operations:
 - {"op":"put","slot":"<slot key>","id":"<spare id>"}  put a spare into an existing slot (replacing what is there)
 - {"op":"remove","slot":"<slot key>"}  take a slot's item out
+- {"op":"move","slot":"<slot key>","day":<day number>}  move what is in that slot to another day (the plan makes room there itself, even on a day with no slot)
 - {"op":"dayPace","day":<day number>,"pace":0|1|2}  make ONE day easier (0) or busier (2); the plan refills that day itself
 - {"op":"dial","dial":"pace"|"food"|"spend","value":0|1|2}  change a whole-trip setting (pace: easy/balanced/packed; food: casual/mix/special; spend: save/balanced/splurge)
 
@@ -55,9 +57,11 @@ Rules:
 - Only use slot keys and spare ids that appear in the input. Never invent places.
 - Keep evening spares in "eve" slots and daytime spares in "day" slots.
 - A spare should go on its own day or one day either side; never move something tied to particular days (markets, shows, "only on").
+- When the traveller asks to move something to another day, use "move". Their request is enough reason, even for something tied to particular days, unless it is closed or not running that day.
 - "Busier"/"more packed" for a day = dayPace 2. "Easier"/"lighter"/"free afternoon" = dayPace 0 (or remove).
 - "Cheaper" = put cheaper spares in place of pricier items, or turn spend down; say roughly what it saves if you can.
 - Change as little as possible. Do not touch days the traveller did not mention unless the request is about the whole trip.
+- The reply talks about their trip, never about slots, keys, ids or how the plan works inside.
 - If nothing fits, or the request is outside what you can do (booking, flights, hotels, another city, anything not about this plan), return "ops": [] and say so in the reply, pointing them to the booking links on the page where relevant.`
 
 function clean(body) {
@@ -127,6 +131,8 @@ function validOps(ops, input) {
         if (o.op === "put" && slotKeys.has(o.slot) && spareIds.has(o.id))
             out.push({ op: "put", slot: o.slot, id: o.id })
         else if (o.op === "remove" && slotKeys.has(o.slot)) out.push({ op: "remove", slot: o.slot })
+        else if (o.op === "move" && slotKeys.has(o.slot) && Number(o.day) >= 1 && Number(o.day) <= nDays)
+            out.push({ op: "move", slot: o.slot, day: num(o.day, 1, nDays) })
         else if (o.op === "dayPace" && Number(o.day) >= 1 && Number(o.day) <= nDays)
             out.push({ op: "dayPace", day: num(o.day, 1, nDays), pace: num(o.pace, 0, 2) })
         else if (o.op === "dial" && ["pace", "food", "spend"].includes(o.dial))
