@@ -25,7 +25,17 @@ export const maxDuration = 30
 
 const KEY = process.env.GOOGLE_PLACES_API_KEY
 
-const cache = new Map() // query -> { v: {website?, maps?}, ts: number }
+const cache = new Map() // query -> { v: {website?, maps?, lodging?}, ts: number }
+
+// Google's lodging types (Places API New, "Lodging" table). A stay the model
+// suggests must come back as one of these; a restaurant or bar that happens to
+// be called "Hotel ..." (Paris's Hotel du Nord) does not.
+const LODGING = new Set([
+    "lodging", "hotel", "motel", "inn", "hostel", "guest_house",
+    "bed_and_breakfast", "resort_hotel", "extended_stay_hotel", "farmstay",
+    "cottage", "private_guest_room", "japanese_inn", "budget_japanese_inn",
+    "campground", "camping_cabin", "rv_park",
+])
 const TTL = 1000 * 60 * 60 * 24 // 24h
 const MAX_QUERIES = 40
 const MAX_QUERY_LEN = 200
@@ -45,7 +55,7 @@ async function lookup(query) {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": KEY,
                     "X-Goog-FieldMask":
-                        "places.websiteUri,places.googleMapsUri,places.displayName",
+                        "places.websiteUri,places.googleMapsUri,places.displayName,places.types,places.primaryType",
                 },
                 body: JSON.stringify({ textQuery: query, pageSize: 1 }),
             }
@@ -68,6 +78,13 @@ async function lookup(query) {
                 out.website = p.websiteUri
             if (typeof p.googleMapsUri === "string" && p.googleMapsUri)
                 out.maps = p.googleMapsUri
+            // Only said when Google found the place AND told us its types.
+            // Nothing found (an Airbnb flat, say) leaves it out: unknown, not "no".
+            const types = [
+                ...(Array.isArray(p.types) ? p.types : []),
+                ...(typeof p.primaryType === "string" ? [p.primaryType] : []),
+            ]
+            if (types.length) out.lodging = types.some((t) => LODGING.has(t))
         }
     } catch (err) {
         console.error("[place-link] lookup failed", err)
