@@ -203,7 +203,8 @@ const AFFILIATE_PARAMS = new Set([
  *     days: [{
  *       title: "Day 1 - Arrival",
  *       slots: [{ time, title, detail, cost, address?,
- *                 area?, booked?, url?, linkText? }]   // Nov 2026, for the PDF
+ *                 area?, booked?, url?, linkText?,     // Nov 2026, for the PDF
+ *                 kind?: "do"|"eat"|"stay" }]          // colour in the glance
  *     }]
  *   },
  *   bookings: [{ group: "(1) Flights", items: [
@@ -432,6 +433,58 @@ function renderBookings(groups, opts) {
         .join("")
 }
 
+// "Your days at a glance" (Nov 2026): one block per day, names and times only,
+// coloured like the trip page (green = things to do, terracotta = places to
+// eat). Deliberately no descriptions: the full day-by-day is the PDF, and this
+// is what kept a 21-day trip well under Gmail's 102KB clip.
+const TERRA = "rgb(166,90,56)"
+function renderGlance(itin) {
+    const days = arr(itin && itin.days, MAX_DAYS)
+    const rows = days
+        .map((d) => {
+            const title = str(d && d.title, 120)
+            const [date, theme] = title.split(" \u00b7 ")
+            const items = arr(d && d.slots, MAX_SLOTS)
+                .filter((x) => str(x && x.title, MAX_SHORT))
+                .map((x) => {
+                    const kind = ["eat", "stay", "do"].includes(x.kind) ? x.kind : x.kind ? "none" : "do"
+                    const dot =
+                        kind === "none"
+                            ? `<span style="display:inline-block;width:8px;height:8px;margin-right:7px;"></span>`
+                            : kind === "stay"
+                            ? `<span style="display:inline-block;width:8px;height:8px;border:1px solid ${GREEN};margin-right:7px;"></span>`
+                            : `<span style="display:inline-block;width:8px;height:8px;background:${kind === "eat" ? TERRA : GREEN};margin-right:7px;"></span>`
+                    const time = str(x.time, 20)
+                    const done = x.booked === true ? ` <span style="font-size:10px;letter-spacing:.08em;color:${GREEN};font-weight:700;">&#10003; BOOKED</span>` : ""
+                    // A small table per item so a long name wraps in its own
+                    // column on a phone instead of under the dot and time.
+                    return `<table role="presentation" style="border-collapse:collapse;width:100%;"><tr>
+                        <td valign="top" style="width:15px;padding:6px 0 3px;">${dot}</td>
+                        <td valign="top" class="ae-soft" style="width:64px;padding:3px 6px 3px 0;font-size:12px;color:${G60};white-space:nowrap;">${esc(time)}</td>
+                        <td valign="top" class="ae-ink" style="padding:3px 0;color:${GREEN};">${esc(str(x.title, MAX_SHORT))}${done}</td>
+                    </tr></table>`
+                })
+                .join("")
+            return `<tr>
+                <td class="ae-rule-soft" valign="top" style="padding:10px 12px 10px 0;border-bottom:1px solid ${RULE_SOFT};width:92px;">
+                    <div class="ae-ink" style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:${GREEN};">${esc(date || "")}</div>
+                    ${theme ? `<div class="ae-soft" style="font-family:${SERIF};font-style:italic;font-size:12px;color:${G60};margin-top:2px;">${esc(theme)}</div>` : ""}
+                </td>
+                <td class="ae-rule-soft" valign="top" style="padding:10px 0;border-bottom:1px solid ${RULE_SOFT};font-size:13.5px;line-height:1.5;">
+                    ${items || `<span class="ae-soft" style="color:${G60};font-style:italic;">Free. Wander.</span>`}
+                </td>
+            </tr>`
+        })
+        .join("")
+    if (!rows) return ""
+    return `<table role="presentation" width="100%" style="border-collapse:collapse;font-family:${SANS};">${rows}</table>
+        <div class="ae-soft" style="font-family:${SANS};font-size:11px;color:${G60};margin-top:8px;">
+            <span style="display:inline-block;width:8px;height:8px;background:${GREEN};margin-right:5px;"></span>Things to do
+            &nbsp;&nbsp;<span style="display:inline-block;width:8px;height:8px;background:${TERRA};margin-right:5px;"></span>Places to eat
+            &nbsp;&nbsp;&middot;&nbsp; ~ means a suggested time
+        </div>`
+}
+
 function renderBudget(budget) {
     const rows = arr(budget && budget.rows, MAX_ROWS)
     if (!rows.length) return ""
@@ -623,7 +676,7 @@ async function handler(req, res) {
     // above already carries both, and printing them twice made the top of the
     // email read as a stutter. What is left is what the subtitle does not say.
     const metaLine = [
-        str(trip.tripType),
+        /^no occasion$/i.test(str(trip.tripType)) ? "" : str(trip.tripType),
         trip.tripLength ? `${str(trip.tripLength, 20)} nights` : "",
         trip.numberOfPeople ? `${str(trip.numberOfPeople, 20)} travelers` : "",
     ]
@@ -736,25 +789,30 @@ async function handler(req, res) {
         attachments.push({ filename: `${fileBase} - Itinerary.doc`, content: toB64(guestDoc) })
     }
 
-    // 3) Budget - Excel-openable .xls.
-    if (budgetHtml) {
-        const budgetXls = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8" />
-<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
-<x:Name>Budget</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-</head><body><h3>The Away Edit - ${esc(str(trip.destination) || title)} Budget</h3>${budgetHtml}</body></html>`
-        attachments.push({
-            filename: `${fileBase} - Budget.xls`,
-            content: toB64(budgetXls),
-        })
-    }
+    // Nov 2026: the budget spreadsheet is no longer attached. The full
+    // breakdown is the last section of the PDF, and phones open .xls badly;
+    // one clear attachment beats two.
 
     // Name the files in the covering note, so nobody has to open one to find
     // out which is which.
-    const attachmentBlurb =
-        attachments.length === 2
-            ? "Two files are attached: your day-by-day as a PDF to share with whoever is coming, and the budget as a spreadsheet."
-            : "Your day-by-day is attached as a PDF, to share with whoever is coming."
+    const isPdf = attachments.some((a) => /\.pdf$/.test(a.filename))
+    const glanceHtml = renderGlance(itin)
+
+    // Inbox preview line (the grey text under the subject). Set on purpose
+    // instead of letting the client show whatever text comes first.
+    const nDays = arr(itin.days, MAX_DAYS).length
+    const firstGroup = arr(body.bookings, MAX_GROUPS).find((g) => /book these first/i.test(str(g && g.group, 120)))
+    const firstCount = firstGroup
+        ? str(arr(firstGroup.items, 1)[0] && arr(firstGroup.items, 1)[0].label, MAX_SHORT).split(" \u00b7 ").filter(Boolean).length
+        : 0
+    const totalAmt = str(body.budget && body.budget.total && body.budget.total.amount, 40)
+    const preheader = [
+        nDays ? `${nDays} days in ${city || "your trip"}` : "",
+        totalAmt ? `${totalAmt} each` : "",
+        firstCount ? `${firstCount} thing${firstCount === 1 ? "" : "s"} to book first` : "",
+    ]
+        .filter(Boolean)
+        .join(" \u00b7 ")
 
     const note = `font-family:${SANS};font-size:14px;line-height:1.75;color:${G80};margin:0 0 16px;`
     const eyebrow = `font-family:${SANS};font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:${GREEN};margin:0 0 14px;border-bottom:1px solid ${RULE};padding-bottom:10px;`
@@ -773,6 +831,7 @@ async function handler(req, res) {
   <style>${DARK_CSS}</style>
 </head>
 <body class="ae-bg" style="margin:0;padding:0;background-color:${BEIGE};font-family:${SERIF};">
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:${BEIGE};opacity:0;">${esc(preheader)}${"&#847;&zwnj;&nbsp;".repeat(60)}</div>
   <div class="ae-bg" style="max-width:640px;margin:0 auto;padding:0;background-color:${BEIGE};">
 
     <div class="ae-panel" style="background:${GREEN};padding:48px 40px 40px;text-align:center;">
@@ -795,21 +854,64 @@ async function handler(req, res) {
 
     ${headlineHtml}
 
-    <div style="padding:34px 40px 40px;">
-      <p class="ae-ink" style="${note}">${attachmentBlurb} What still needs arranging is below &#8212; in the order that keeps it from selling out from under you.</p>
-      <p class="ae-soft" style="font-family:${SANS};font-size:13px;line-height:1.7;color:${G60};margin:0 0 34px;">Every booking is yours to make. The Away Edit reserves nothing on your behalf, so check prices, opening hours and availability before you commit.</p>
+    <div style="padding:30px 40px 40px;">
+      ${
+          glanceHtml
+              ? `<p class="ae-ink ae-rule" style="${eyebrow}">Your days at a glance</p>${glanceHtml}<div style="height:30px"></div>`
+              : ""
+      }
 
       ${
           bookingsHtml
-              ? `<p class="ae-ink ae-rule" style="${eyebrow}">What to book</p>${bookingsHtml}<div style="height:18px"></div>`
+              ? `<p class="ae-ink ae-rule" style="${eyebrow}">What to book</p>${bookingsHtml}<div style="height:12px"></div>`
               : ""
       }
+
+      <div class="ae-wash" style="background:${WASH};padding:18px 20px;margin:6px 0 30px;font-family:${SANS};">
+        <div class="ae-ink" style="font-size:14px;font-weight:600;color:${GREEN};margin-bottom:4px;">&#128206;&nbsp; Your full trip is attached${isPdf ? " as a PDF" : ""}</div>
+        <div class="ae-soft" style="font-size:13px;line-height:1.6;color:${G60};">Every day with times, descriptions and links, plus the full budget. Ready to print, or forward to whoever is coming.</div>
+      </div>
+
+      <p class="ae-soft" style="font-family:${SANS};font-size:12px;line-height:1.7;color:${G60};margin:0 0 30px;">Every booking is yours to make. The Away Edit reserves nothing on your behalf, so check prices, opening hours and availability before you commit.</p>
 
       ${renderFooter()}
     </div>
   </div>
 </body>
 </html>`
+
+    // Plain-text version alongside the designed one: better deliverability,
+    // and readable anywhere.
+    const plainText = [
+        title,
+        subtitle,
+        totalAmt ? `About ${totalAmt} per person` : "",
+        "",
+        "YOUR DAYS",
+        ...arr(itin.days, MAX_DAYS).map(
+            (d) =>
+                str(d && d.title, 120) +
+                "\n" +
+                arr(d && d.slots, MAX_SLOTS)
+                    .filter((x) => str(x && x.title, MAX_SHORT))
+                    .map((x) => `  ${str(x.time, 20)}  ${str(x.title, MAX_SHORT)}${x.booked === true ? " (booked)" : ""}`)
+                    .join("\n")
+        ),
+        "",
+        "WHAT TO BOOK",
+        ...arr(body.bookings, MAX_GROUPS).flatMap((g) =>
+            arr(g && g.items, MAX_ITEMS).map((it) => {
+                const l = arr(it && it.links, MAX_LINKS).map((x) => linkUrl(x && x.url)).find(Boolean)
+                return `- ${str(it && it.label, MAX_SHORT)}${l ? " " + l : ""}`
+            })
+        ),
+        "",
+        "Your full trip is attached as a PDF.",
+        "You own every booking in this plan; The Away Edit books nothing on your behalf.",
+    ]
+        .filter((x) => x !== null)
+        .join("\n")
+        .slice(0, 60000)
 
     try {
         const response = await fetch("https://api.resend.com/emails", {
@@ -823,6 +925,7 @@ async function handler(req, res) {
                 to: email, // validated single address
                 subject: subjectLine,
                 html: emailHTML,
+                text: plainText,
                 attachments,
                 ...(UNSUBSCRIBE_URL
                     ? {
