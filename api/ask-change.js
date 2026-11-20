@@ -64,6 +64,8 @@ Rules:
 - When the traveller asks to move something to another day, use "move". Their request is enough reason, even for something tied to particular days, unless it is closed or not running that day.
 - "Busier"/"more packed" for a day = dayPace 2. "Easier"/"lighter"/"free afternoon" = dayPace 0 (or remove).
 - "Cheaper" = put cheaper spares in place of pricier items, or turn spend down; say roughly what it saves if you can.
+- A request with several parts ("swap X, and add Y") gets ALL the operations for every part in the one "ops" array, and one reply covering them all.
+- Money: talk in US dollars ($), as the trip page does. Never quote euros, pounds or any other currency, even for a trip abroad.
 - Change as little as possible. Do not touch days the traveller did not mention unless the request is about the whole trip.
 - The reply talks about their trip, never about slots, keys, ids or how the plan works inside.
 - If nothing fits, or the request is outside what you can do (booking, flights, hotels, another city, anything not about this plan), return "ops": [] and say so in the reply, pointing them to the booking links on the page where relevant.`
@@ -112,16 +114,35 @@ function clean(body) {
     }
 }
 
+// The first balanced {...} that parses and looks like an answer. Final test,
+// Nov 2026: a two-part request on a big plan came back with prose around the
+// JSON (and a "}" in that prose), so first-"{"-to-last-"}" failed twice.
 function parseJSON(text) {
-    const t = String(text || "").trim().replace(/^```(?:json)?\s*|\s*```$/g, "")
-    const a = t.indexOf("{")
-    const b = t.lastIndexOf("}")
-    if (a < 0 || b <= a) return null
-    try {
-        return JSON.parse(t.slice(a, b + 1))
-    } catch {
-        return null
+    const t = String(text || "").replace(/```(?:json)?/g, "")
+    for (let a = t.indexOf("{"); a >= 0; a = t.indexOf("{", a + 1)) {
+        let depth = 0
+        let inStr = false
+        let esc = false
+        for (let i = a; i < t.length; i++) {
+            const ch = t[i]
+            if (inStr) {
+                if (esc) esc = false
+                else if (ch === "\\") esc = true
+                else if (ch === '"') inStr = false
+                continue
+            }
+            if (ch === '"') inStr = true
+            else if (ch === "{") depth++
+            else if (ch === "}" && --depth === 0) {
+                try {
+                    const o = JSON.parse(t.slice(a, i + 1))
+                    if (o && typeof o === "object" && ("ops" in o || "reply" in o)) return o
+                } catch {}
+                break
+            }
+        }
     }
+    return null
 }
 
 // Keep only operations that point at things the request actually contained.
@@ -169,7 +190,7 @@ async function handler(req, res) {
             },
             body: JSON.stringify({
                 model: MODEL,
-                max_tokens: 1200,
+                max_tokens: 2000,
                 system: SYSTEM,
                 messages: [{ role: "user", content: JSON.stringify(input) }],
             }),
@@ -195,7 +216,7 @@ async function handler(req, res) {
                 },
                 body: JSON.stringify({
                     model: MODEL,
-                    max_tokens: 1200,
+                    max_tokens: 2000,
                     system: SYSTEM,
                     messages: [
                         { role: "user", content: JSON.stringify(input) },
@@ -209,7 +230,10 @@ async function handler(req, res) {
             if (r2.ok && d2)
                 parsed = parseJSON((d2.content || []).map((c) => (c && c.type === "text" ? c.text : "")).join(""))
         }
-        if (!parsed) return res.status(200).json({ reply: "I didn't quite catch that. Could you say it another way?", ops: [] })
+        if (!parsed) {
+            console.error("[ask-change] unparseable answer", String(text || "").slice(0, 300))
+            return res.status(200).json({ reply: "I didn't quite catch that. Try asking for one change at a time.", ops: [] })
+        }
         return res.status(200).json({
             reply: str(parsed.reply, 300),
             ops: validOps(parsed.ops, input),
