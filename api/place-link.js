@@ -55,7 +55,7 @@ async function lookup(query) {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": KEY,
                     "X-Goog-FieldMask":
-                        "places.websiteUri,places.googleMapsUri,places.displayName,places.types,places.primaryType",
+                        "places.websiteUri,places.googleMapsUri,places.displayName,places.types,places.primaryType,places.addressComponents",
                 },
                 body: JSON.stringify({ textQuery: query, pageSize: 1 }),
             }
@@ -85,6 +85,28 @@ async function lookup(query) {
                 ...(typeof p.primaryType === "string" ? [p.primaryType] : []),
             ]
             if (types.length) out.lodging = types.some((t) => LODGING.has(t))
+            // The neighbourhood Google files it under, for the card's area
+            // label (the model's guess was sometimes the wrong district).
+            const comps = Array.isArray(p.addressComponents) ? p.addressComponents : []
+            const pick = (t) => comps.find((c) => Array.isArray(c?.types) && c.types.includes(t))
+            const clean = (c) =>
+                String(c?.longText || c?.shortText || "")
+                    .replace(/\s+(Ward|District|Borough)$/i, "")
+                    .replace(/-ku$/i, "")
+                    .trim()
+            // Numbered districts ("8e Arrondissement", "1 Chome") say less than
+            // the model's "Le Marais", so they are skipped.
+            const named = (c) => {
+                const t = clean(c)
+                return t && !/\d/.test(t) && t.length <= 30 ? t : ""
+            }
+            const area =
+                named(pick("neighborhood")) ||
+                named(pick("sublocality_level_1")) ||
+                named(pick("sublocality")) ||
+                named(pick("locality")) ||
+                named(pick("postal_town"))
+            if (area) out.area = area
         }
     } catch (err) {
         console.error("[place-link] lookup failed", err)
