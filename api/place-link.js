@@ -100,12 +100,12 @@ async function lookup(query) {
                 const t = clean(c)
                 return t && !/\d/.test(t) && t.length <= 30 ? t : ""
             }
+            // Town names are left out: Google gives the local spelling
+            // ("Lisboa" on a Lisbon trip), which reads as a different place.
             const area =
                 named(pick("neighborhood")) ||
                 named(pick("sublocality_level_1")) ||
-                named(pick("sublocality")) ||
-                named(pick("locality")) ||
-                named(pick("postal_town"))
+                named(pick("sublocality"))
             if (area) out.area = area
         }
     } catch (err) {
