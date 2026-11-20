@@ -37,6 +37,45 @@ const LODGING = new Set([
     "campground", "camping_cabin", "rv_park",
 ])
 const TTL = 1000 * 60 * 60 * 24 // 24h
+
+// Is Google's top hit the place we asked about? (Final test, Nov 2026: a
+// generic "Aurora Alert Walk" matched some business in Vellir, and its
+// neighbourhood and website were used as if they were the walk's.) Share of
+// the asked-for name's telling words found in Google's name; words every
+// city has ("temple", "museum", "hotel") count for little.
+const STOP = new Set([
+    "the", "a", "an", "of", "and", "at", "in", "on", "de", "la", "le", "du",
+    "des", "di", "da", "del", "el", "il", "by", "for", "with", "to",
+])
+const GENERIC = new Set([
+    "temple", "shrine", "church", "cathedral", "basilica", "museum", "gallery",
+    "palace", "castle", "park", "garden", "gardens", "market", "square",
+    "piazza", "plaza", "bridge", "tower", "restaurant", "cafe", "bar", "bistro",
+    "hotel", "inn", "ryokan", "resort", "suites", "beach", "street", "old",
+    "town", "city", "centre", "center", "national", "san", "santa", "st",
+    "saint", "royal", "grand", "great", "new", "kitchen", "grill", "house",
+    "tour", "walk", "visit", "private", "guided", "small", "group", "class",
+    "tasting", "experience", "sunset", "evening", "night", "morning", "day",
+    "trip", "dinner", "lunch", "breakfast", "free", "exploration", "stroll",
+    "hike", "sail", "cruise", "wine", "beer", "mezcal", "cocktail", "cocktails",
+    "coffee", "tea", "rum", "sake", "show", "live", "music",
+])
+const words = (s) =>
+    String(s || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9 ]+/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 1 && !STOP.has(w))
+const weight = (w) => (GENERIC.has(w) ? 0.3 : 1)
+function nameMatch(query, name) {
+    const want = words(String(query).split(",")[0])
+    if (!want.length) return 0
+    const got = new Set(words(name))
+    const total = want.reduce((a, w) => a + weight(w), 0)
+    return want.filter((w) => got.has(w)).reduce((a, w) => a + weight(w), 0) / total
+}
 const MAX_QUERIES = 40
 const MAX_QUERY_LEN = 200
 const CONCURRENCY = 8
@@ -73,7 +112,11 @@ async function lookup(query) {
         }
 
         const p = data?.places?.[0]
-        if (p) {
+        const same = p ? nameMatch(query, p?.displayName?.text) >= 0.5 : false
+        if (p) out.match = same
+        // Only the place we asked about gives us a website, a type or an
+        // area. A different place's would be wrong, not just unhelpful.
+        if (p && same) {
             if (typeof p.websiteUri === "string" && p.websiteUri)
                 out.website = p.websiteUri
             if (typeof p.googleMapsUri === "string" && p.googleMapsUri)
