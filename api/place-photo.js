@@ -90,6 +90,30 @@ function pickPlace(query, places) {
     return best
 }
 
+// Which of the place's photos (Google gives up to 10). Final test, Nov 2026:
+// the first one was sometimes a visitor's selfie. The place's own photos
+// (author = the place) come first, then landscape over portrait, then
+// Google's order. Same request either way: the photo list already comes with
+// each photo's author and size.
+function pickPhoto(place) {
+    const photos = Array.isArray(place?.photos) ? place.photos.slice(0, 10) : []
+    if (!photos.length) return null
+    const own = String(place?.displayName?.text || "").toLowerCase().trim()
+    let best = photos[0]
+    let bestScore = -1
+    photos.forEach((ph, i) => {
+        const authors = Array.isArray(ph?.authorAttributions) ? ph.authorAttributions : []
+        const byPlace = own && authors.some((a) => String(a?.displayName || "").toLowerCase().trim() === own)
+        const wide = Number(ph?.widthPx) > Number(ph?.heightPx)
+        const score = (byPlace ? 4 : 0) + (wide ? 2 : 0) - i * 0.2
+        if (score > bestScore) {
+            best = ph
+            bestScore = score
+        }
+    })
+    return best
+}
+
 async function handler(req, res) {
     const query = (req.query.query || "").toString().trim()
     if (!query) {
@@ -131,7 +155,7 @@ async function handler(req, res) {
         const searchData = await searchRes.json()
         const places = Array.isArray(searchData?.places) ? searchData.places : []
         const place = pickPlace(query, places)
-        const photoName = place?.photos?.[0]?.name
+        const photoName = pickPhoto(place)?.name
         if (!photoName) {
             cache.set(query, { url: null, ts: Date.now() })
             return send404()
