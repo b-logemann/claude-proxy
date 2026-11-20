@@ -94,7 +94,7 @@ async function lookup(query) {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": KEY,
                     "X-Goog-FieldMask":
-                        "places.websiteUri,places.googleMapsUri,places.displayName,places.types,places.primaryType,places.addressComponents",
+                        "places.websiteUri,places.googleMapsUri,places.displayName,places.types,places.primaryType,places.addressComponents,places.priceLevel",
                 },
                 body: JSON.stringify({ textQuery: query, pageSize: 1 }),
             }
@@ -121,6 +121,9 @@ async function lookup(query) {
                 out.website = p.websiteUri
             if (typeof p.googleMapsUri === "string" && p.googleMapsUri)
                 out.maps = p.googleMapsUri
+            // Google lists it as free to visit (museums, parks, churches): the
+            // card can say "Free" instead of "Price not confirmed".
+            if (p.priceLevel === "PRICE_LEVEL_FREE") out.free = true
             // Only said when Google found the place AND told us its types.
             // Nothing found (an Airbnb flat, say) leaves it out: unknown, not "no".
             const types = [
