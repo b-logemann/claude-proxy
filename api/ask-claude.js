@@ -77,6 +77,12 @@ export default withGuard(handler, {
     prefix: "ask-claude",
     limit: 15,
     windowSec: 60,
+    // Per visitor per day (Nov 2026). A trip is 3-6 planning calls (the place,
+    // 1-3 itinerary parts, the splurge list), plus the odd retry. The site
+    // shows "3 trips left today"; 30 leaves room for retries, a long trip and
+    // "surprise me" suggestions without ever stopping normal use, while
+    // keeping one person from spending the site's whole day.
+    ipDailyCap: 30,
     // The real spend ceiling. Per-IP limits do not survive IP rotation; this
     // does. A complete trip is roughly 5-15 calls, so 500/day is on the order
     // of 35-100 trips. Raise it when you have traffic data.
