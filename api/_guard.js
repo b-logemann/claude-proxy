@@ -1,3 +1,4 @@
+
 // api/_guard.js - CORS allowlist + Upstash rate limiting for (req,res) handlers.
 //
 // Changes from the previous version, in order of how much they matter:
@@ -20,6 +21,12 @@
 //      limits cannot provide, because IP rotation is cheap.
 //   7. Limiter calls are wrapped, so an Upstash outage no longer 500s every
 //      endpoint at once.
+//   8. (Nov 2026) Optional per-visitor DAILY cap (ipDailyCap): how much one
+//      connection may use in a day, so one heavy user can't spend the whole
+//      site's daily allowance. Checked before the site-wide cap, so a visitor
+//      who is already over their own limit no longer eats into everyone
+//      else's. Pairs with the "N trips left today" counter on the site, which
+//      is the friendly version; this is the one a cleared browser can't reset.
 
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
@@ -124,6 +131,21 @@ function getDailyCap(cap, prefix) {
     return limiters[key]
 }
 
+// Per-visitor (per-connection) daily allowance. Fixed one-day windows, so it
+// resets at midnight UTC (6pm Chicago); the site's own counter resets at the
+// visitor's local midnight and sits below this, so normal use never meets it.
+function getIpDaily(cap, prefix) {
+    if (!redis || !cap) return null
+    const key = `ipday:${prefix}:${cap}`
+    if (!limiters[key])
+        limiters[key] = new Ratelimit({
+            redis,
+            limiter: Ratelimit.fixedWindow(cap, "1 d"),
+            prefix: `rlipday:${prefix}`,
+        })
+    return limiters[key]
+}
+
 function clientIp(req) {
     const xff = req.headers["x-forwarded-for"]
     if (typeof xff === "string" && xff.length) {
@@ -146,6 +168,9 @@ function tooMany(res, reset, message) {
  *   windowSec      length of that window in seconds.            default 60
  *   prefix         Redis key namespace. Give every route its
  *                  own, or they share one bucket.               default "general"
+ *   ipDailyCap     requests per day from ONE visitor (IP).
+ *                  Set it on routes that spend money so one
+ *                  person can't use up the site's daily cap.   default none
  *   dailyCap       total requests per day across ALL callers.
  *                  Omit for free endpoints; set it on anything
  *                  that spends money.                           default none
@@ -160,6 +185,7 @@ export function withGuard(handler, opts = {}) {
     const windowSec = opts.windowSec ?? 60
     const prefix = opts.prefix ?? "general"
     const dailyCap = opts.dailyCap ?? null
+    const ipDailyCap = opts.ipDailyCap ?? null
     const requireOrigin = opts.requireOrigin !== false
     const requireLimiter = opts.requireLimiter ?? IS_PROD
 
@@ -188,26 +214,16 @@ export function withGuard(handler, opts = {}) {
         }
 
         const ipLimiter = getLimiter(limit, windowSec, prefix)
+        const ipDayLimiter = getIpDaily(ipDailyCap, prefix)
         const capLimiter = getDailyCap(dailyCap, prefix)
 
-        if (ipLimiter || capLimiter) {
+        if (ipLimiter || ipDayLimiter || capLimiter) {
             try {
-                if (capLimiter) {
-                    const g = await capLimiter.limit("global")
-                    if (!g.success) {
-                        console.error(
-                            `[guard] ${prefix}: DAILY CAP of ${dailyCap} reached`
-                        )
-                        return tooMany(
-                            res,
-                            g.reset,
-                            "This service is at capacity today. Please try again tomorrow."
-                        )
-                    }
-                }
-
+                const ip = clientIp(req)
+                // Per-visitor checks first: someone who is over their own
+                // limit is turned away without spending the shared daily cap.
                 if (ipLimiter) {
-                    const r = await ipLimiter.limit(clientIp(req))
+                    const r = await ipLimiter.limit(ip)
                     res.setHeader("X-RateLimit-Limit", String(r.limit))
                     res.setHeader(
                         "X-RateLimit-Remaining",
@@ -220,6 +236,34 @@ export function withGuard(handler, opts = {}) {
                             r.reset,
                             "Too many requests. Please slow down."
                         )
+                }
+
+                if (ipDayLimiter) {
+                    const d = await ipDayLimiter.limit(ip)
+                    if (!d.success) {
+                        console.warn(
+                            `[guard] ${prefix}: visitor daily limit of ${ipDailyCap} reached`
+                        )
+                        return tooMany(
+                            res,
+                            d.reset,
+                            "You've reached today's planning limit. Please come back tomorrow."
+                        )
+                    }
+                }
+
+                if (capLimiter) {
+                    const g = await capLimiter.limit("global")
+                    if (!g.success) {
+                        console.error(
+                            `[guard] ${prefix}: DAILY CAP of ${dailyCap} reached`
+                        )
+                        return tooMany(
+                            res,
+                            g.reset,
+                            "This service is at capacity today. Please try again tomorrow."
+                        )
+                    }
                 }
             } catch (err) {
                 // An Upstash outage should not take down every endpoint at
