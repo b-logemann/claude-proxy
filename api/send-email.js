@@ -1,3 +1,4 @@
+
 // api/send-email.js - structured input only. The client sends DATA; this file
 // builds the HTML.
 //
@@ -160,6 +161,9 @@ const SANS = "'Helvetica Neue',Helvetica,Arial,sans-serif"
 
 const SITE_URL = process.env.SITE_URL || "https://theawayedit.com"
 const CONTACT_EMAIL = process.env.CONTACT_EMAIL || ""
+const REPLY_TO = /^[^\s@<>,]+@[^\s@<>,]+\.[^\s@<>,]+$/.test(CONTACT_EMAIL.trim())
+    ? CONTACT_EMAIL.trim()
+    : ""
 const MAILING_ADDRESS = process.env.MAILING_ADDRESS || ""
 const PRIVACY_URL = process.env.PRIVACY_URL || ""
 const UNSUBSCRIBE_URL = process.env.UNSUBSCRIBE_URL || ""
@@ -922,6 +926,10 @@ async function handler(req, res) {
             },
             body: JSON.stringify({
                 from: process.env.FROM_EMAIL,
+                // Replies go to CONTACT_EMAIL (a real inbox you read); the
+                // sender shown stays FROM_EMAIL. Skipped if it is not a
+                // plain, valid address, so a typo cannot break sending.
+                ...(REPLY_TO ? { reply_to: REPLY_TO } : {}),
                 to: email, // validated single address
                 subject: subjectLine,
                 html: emailHTML,
