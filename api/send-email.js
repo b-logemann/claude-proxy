@@ -1,4 +1,3 @@
-
 // api/send-email.js - structured input only. The client sends DATA; this file
 // builds the HTML.
 //
@@ -51,6 +50,7 @@
 
 import { withGuard } from "./_guard.js"
 import { buildTripPdf } from "./_trip-pdf.js"
+import { meter } from "./_meter.js"
 
 export const maxDuration = 60
 
@@ -946,16 +946,19 @@ async function handler(req, res) {
             }),
         })
 
-        const data = await response.json()
+        const data = await response.json().catch(() => null)
 
         if (!response.ok) {
             console.error("[send-email] resend error", data)
+            await meter({ email_failed: 1 })
             return res.status(502).json({ error: "Failed to send email" })
         }
 
+        await meter({ email_sent: 1 })
         return res.status(200).json({ success: true })
     } catch (err) {
         console.error("[send-email] unexpected", err)
+        await meter({ email_failed: 1 })
         return res.status(500).json({ error: "Unexpected error" })
     }
 }
