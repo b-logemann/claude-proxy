@@ -23,6 +23,22 @@ const EVENTS = new Set([
     "email_sent",
     "pdf_saved",
     "new_trip",
+    // Nov 2026 (stats page): why a build failed, and how far people get
+    // through the questions. Must match TRACK_EVENTS in AwayEdit.tsx.
+    "fail_limit",
+    "fail_slow",
+    "fail_long",
+    "fail_server",
+    "fail_network",
+    "fail_parse",
+    "fail_other",
+    "options_failed",
+    "out_of_trips",
+    "q_feel",
+    "q_who",
+    "q_length",
+    "q_budget",
+    "q_summary",
 ])
 
 const redis =
@@ -65,4 +81,5 @@ export default withGuard(handler, {
     dailyCap: 20000,
     requireOrigin: true,
     requireLimiter: false,
+    meterCalls: false,
 })
