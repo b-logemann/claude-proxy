@@ -17,6 +17,7 @@
 // the request before it is returned; the client checks again before applying.
 
 import { withGuard } from "./_guard.js"
+import { meter, claudeUsage } from "./_meter.js"
 
 export const maxDuration = 30
 
@@ -197,8 +198,10 @@ async function handler(req, res) {
             signal: ctrl.signal,
         })
         const data = await r.json().catch(() => null)
+        await meter(claudeUsage(MODEL, data && data.usage))
         if (!r.ok || !data) {
             console.error("[ask-change] upstream", r.status, data && data.error)
+            await meter({ "err:ask_change": 1 })
             return res.status(502).json({ error: "Planner unavailable" })
         }
         const text = (data.content || []).map((c) => (c && c.type === "text" ? c.text : "")).join("")
@@ -227,11 +230,13 @@ async function handler(req, res) {
                 signal: ctrl.signal,
             })
             const d2 = await r2.json().catch(() => null)
+            await meter(claudeUsage(MODEL, d2 && d2.usage))
             if (r2.ok && d2)
                 parsed = parseJSON((d2.content || []).map((c) => (c && c.type === "text" ? c.text : "")).join(""))
         }
         if (!parsed) {
             console.error("[ask-change] unparseable answer", String(text || "").slice(0, 300))
+            await meter({ "err:ask_change_unclear": 1 })
             return res.status(200).json({ reply: "I didn't quite catch that. Try asking for one change at a time.", ops: [] })
         }
         return res.status(200).json({
@@ -240,6 +245,7 @@ async function handler(req, res) {
         })
     } catch (err) {
         console.error("[ask-change] unexpected", err && err.name)
+        await meter({ "err:ask_change": 1 })
         return res.status(504).json({ error: "Took too long" })
     } finally {
         clearTimeout(timer)
