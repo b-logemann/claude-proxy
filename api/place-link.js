@@ -20,6 +20,7 @@
 // guard are what keep that bounded. Watch it against the budget alert.
 
 import { withGuard } from "./_guard.js"
+import { meter } from "./_meter.js"
 
 export const maxDuration = 30
 
@@ -80,6 +81,10 @@ const MAX_QUERIES = 40
 const MAX_QUERY_LEN = 200
 const CONCURRENCY = 8
 
+// Billed Google searches and failures, added up per request and written to
+// the stats meter once at the end (one Redis call, not one per place).
+const tally = { search: 0, err: 0 }
+
 async function lookup(query) {
     const hit = cache.get(query)
     if (hit && Date.now() - hit.ts < TTL) return hit.v
@@ -99,6 +104,7 @@ async function lookup(query) {
                 body: JSON.stringify({ textQuery: query, pageSize: 1 }),
             }
         )
+        tally.search++
         const data = await r.json()
 
         // Unlike place-photo.js, do NOT swallow this silently. A dead key or a
@@ -108,6 +114,7 @@ async function lookup(query) {
             console.error(
                 `[place-link] Places error ${data.error.code} ${data.error.status}: ${data.error.message}`
             )
+            tally.err++
             return {} // not cached - so it retries once the account is fixed
         }
 
@@ -156,6 +163,7 @@ async function lookup(query) {
         }
     } catch (err) {
         console.error("[place-link] lookup failed", err)
+        tally.err++
         return {} // transient - don't poison the cache
     }
 
@@ -196,6 +204,11 @@ async function handler(req, res) {
         )
         for (const [q, v] of settled) results[q] = v
     }
+
+    const used = { places_text_ent: tally.search, "err:places_link": tally.err }
+    tally.search = 0
+    tally.err = 0
+    await meter(used)
 
     return res.status(200).json({ results })
 }
