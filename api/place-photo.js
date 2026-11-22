@@ -20,6 +20,7 @@
 //   3. No good match, no photo: below a minimum name match it returns 404
 //      and the page shows its plain tile instead of a guess.
 import { withGuard } from "./_guard.js"
+import { meter } from "./_meter.js"
 
 const KEY = process.env.GOOGLE_PLACES_API_KEY
 const cache = new Map() // query -> { url: string|null, ts: number }
@@ -228,10 +229,16 @@ async function handler(req, res) {
             }
         )
         const searchData = await searchRes.json()
+        if (searchData?.error) {
+            console.error("[place-photo] Places error", searchData.error.status)
+            await meter({ places_text_pro: 1, "err:places_photo": 1 })
+            return send404() // not cached: retries once the account is fixed
+        }
         const places = Array.isArray(searchData?.places) ? searchData.places : []
         const place = pickPlace(pq.text, places)
         const photoName = pickPhoto(place)?.name
         if (!photoName) {
+            await meter({ places_text_pro: 1 })
             cache.set(query, { url: null, ts: Date.now() })
             return send404()
         }
@@ -242,9 +249,11 @@ async function handler(req, res) {
         )
         const mediaData = await mediaRes.json()
         const url = mediaData?.photoUri || null
+        await meter({ places_text_pro: 1, places_photo: 1, "err:places_photo": url ? 0 : 1 })
         cache.set(query, { url, ts: Date.now() })
         return url ? redirect(url) : send404()
     } catch {
+        await meter({ "err:places_photo": 1 })
         return send404()
     }
 }
@@ -274,4 +283,5 @@ export default withGuard(handler, {
     dailyCap: 5000,
     requireOrigin: false,
     requireLimiter: false,
+    meterCalls: false,
 })
