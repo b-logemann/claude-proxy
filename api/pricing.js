@@ -1,5 +1,6 @@
 // api/pricing.js
 import { withGuard } from "./_guard.js"
+import { meter } from "./_meter.js"
 
 export const maxDuration = 30
 
@@ -63,6 +64,17 @@ async function getFlight({ origin, destination, departureDate, returnDate }) {
         debug,
     }
 }
+// Every SerpApi search counts against the monthly plan, so each one is
+// metered for the stats page, and so is each failure (an "error" from
+// SerpApi is usually an empty plan or a bad key).
+async function serpGet(url) {
+    const g = await safeGet(url)
+    const bad = !g.json || g.json.error
+    // An "out of searches" refusal is not billed; anything that answered is.
+    const refused = /run out|searches|plan|invalid api key/i.test(String(g.json?.error || ""))
+    await meter({ serpapi: refused ? 0 : 1, "err:serpapi": bad ? 1 : 0 })
+    return g
+}
 
 // Hotels — SerpApi Google Hotels. rate_per_night is per room; per-person ÷2.
 async function getHotel({ cityName, checkInDate, checkOutDate }) {
@@ -88,7 +100,7 @@ async function getHotel({ cityName, checkInDate, checkOutDate }) {
         hl: "en",
         api_key: SERPAPI_KEY,
     })
-    const g = await safeGet(`https://serpapi.com/search.json?${params}`)
+    const g = await serpGet(`https://serpapi.com/search.json?${params}`)
     const debug = {
         status: g.status,
         error: g.json?.error,
@@ -163,7 +175,7 @@ async function getNamedStay({ name, cityName, checkInDate, checkOutDate, adults 
         hl: "en",
         api_key: SERPAPI_KEY,
     })
-    const g = await safeGet(`https://serpapi.com/search.json?${params}`)
+    const g = await serpGet(`https://serpapi.com/search.json?${params}`)
     if (!g.json || g.json.error) {
         console.error("[pricing] stay lookup", g.status, g.json?.error || g.snippet)
         return { found: false } // not cached: a quota or key problem should retry
@@ -259,4 +271,15 @@ async function handler(req, res) {
     }
 }
 
-export default withGuard(handler, { prefix: "pricing" })
+// Nov 2026: daily limits. Every call can spend up to 3 SerpApi searches from
+// the monthly plan. A visitor's trip asks once (and the 3-trips-a-day counter
+// keeps that to a handful), so 20 a day never touches a real person; the
+// site-wide 300 a day (up to ~900 searches) stops a script from emptying the
+// month's plan. Over a limit, the page simply keeps its hotel estimates.
+export default withGuard(handler, {
+    prefix: "pricing",
+    limit: 30,
+    windowSec: 60,
+    ipDailyCap: 20,
+    dailyCap: 300,
+})
