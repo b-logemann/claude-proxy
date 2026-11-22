@@ -149,9 +149,14 @@ async function lookup(query) {
                     .trim()
             // Numbered districts ("8e Arrondissement", "1 Chome") say less than
             // the model's "Le Marais", so they are skipped.
+            // Also skipped (Oaxaca, Nov 2026): Google sometimes files a place
+            // under a route name in capitals ("RUTA INDEPENDENCIA") or an
+            // internal code ("OAX_RE_BENITO"). The page keeps the model's area.
             const named = (c) => {
                 const t = clean(c)
-                return t && !/\d/.test(t) && t.length <= 30 ? t : ""
+                if (!t || /\d|_/.test(t) || t.length > 30) return ""
+                if (/[A-Z]{2}/.test(t) && t === t.toUpperCase()) return ""
+                return t
             }
             // Town names are left out: Google gives the local spelling
             // ("Lisboa" on a Lisbon trip), which reads as a different place.
