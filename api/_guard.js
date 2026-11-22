@@ -1,4 +1,3 @@
-
 // api/_guard.js - CORS allowlist + Upstash rate limiting for (req,res) handlers.
 //
 // Changes from the previous version, in order of how much they matter:
@@ -27,9 +26,14 @@
 //      who is already over their own limit no longer eats into everyone
 //      else's. Pairs with the "N trips left today" counter on the site, which
 //      is the friendly version; this is the one a cleared browser can't reset.
+//   9. (Nov 2026) Counts for the stats page (see _meter.js): requests that
+//      got through, per route, and requests turned away, by reason. Counts
+//      only - no IP or anything else about the caller. meterCalls:false
+//      skips the "got through" count on very busy routes.
 
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
+import { meter } from "./_meter.js"
 
 const IS_PROD = process.env.VERCEL_ENV === "production"
 
@@ -179,7 +183,26 @@ function tooMany(res, reset, message) {
  *                  which send no Origin.                        default true
  *   requireLimiter in production, return 503 rather than run
  *                  unlimited when Redis is unavailable.         default true in prod
+ *   meterCalls     count requests that get through, for the
+ *                  stats page. Turn off on very busy routes.    default true
  */
+// Refused-origin requests come before any rate limit, so a bot hammering the
+// proxy could otherwise turn each refusal into a Redis write. They are added
+// up in memory and written at most once a minute per server instance.
+const originPending = {}
+let originFlushed = 0
+async function countOriginBlock(prefix) {
+    originPending[prefix] = (originPending[prefix] || 0) + 1
+    if (Date.now() - originFlushed < 60000) return
+    originFlushed = Date.now()
+    const out = {}
+    for (const k of Object.keys(originPending)) {
+        out[`block_origin:${k}`] = originPending[k]
+        delete originPending[k]
+    }
+    await meter(out)
+}
+
 export function withGuard(handler, opts = {}) {
     const limit = opts.limit ?? 30
     const windowSec = opts.windowSec ?? 60
@@ -188,6 +211,8 @@ export function withGuard(handler, opts = {}) {
     const ipDailyCap = opts.ipDailyCap ?? null
     const requireOrigin = opts.requireOrigin !== false
     const requireLimiter = opts.requireLimiter ?? IS_PROD
+    const meterCalls = opts.meterCalls !== false
+    const blocked = (why) => meter({ [`block_${why}:${prefix}`]: 1 })
 
     return async function guarded(req, res) {
         const origin = applyCors(req, res)
@@ -198,9 +223,12 @@ export function withGuard(handler, opts = {}) {
         // cross-origin fetch, so legitimate calls from the site are unaffected;
         // what this blocks is curl and everything like it.
         if (!origin) {
-            if (requireOrigin)
+            if (requireOrigin) {
+                await countOriginBlock(prefix)
                 return res.status(403).json({ error: "Origin required" })
+            }
         } else if (!isAllowed(origin)) {
+            await countOriginBlock(prefix)
             return res.status(403).json({ error: "Origin not allowed" })
         }
 
@@ -230,12 +258,14 @@ export function withGuard(handler, opts = {}) {
                         String(Math.max(0, r.remaining))
                     )
                     res.setHeader("X-RateLimit-Reset", String(r.reset))
-                    if (!r.success)
+                    if (!r.success) {
+                        await blocked("rate")
                         return tooMany(
                             res,
                             r.reset,
                             "Too many requests. Please slow down."
                         )
+                    }
                 }
 
                 if (ipDayLimiter) {
@@ -244,6 +274,7 @@ export function withGuard(handler, opts = {}) {
                         console.warn(
                             `[guard] ${prefix}: visitor daily limit of ${ipDailyCap} reached`
                         )
+                        await blocked("visitor_day")
                         return tooMany(
                             res,
                             d.reset,
@@ -258,6 +289,7 @@ export function withGuard(handler, opts = {}) {
                         console.error(
                             `[guard] ${prefix}: DAILY CAP of ${dailyCap} reached`
                         )
+                        await blocked("site_cap")
                         return tooMany(
                             res,
                             g.reset,
@@ -269,6 +301,7 @@ export function withGuard(handler, opts = {}) {
                 // An Upstash outage should not take down every endpoint at
                 // once. Paid routes fail closed; free ones carry on.
                 console.error(`[guard] ${prefix}: limiter error`, err)
+                await meter({ "err:limiter": 1 })
                 if (requireLimiter)
                     return res
                         .status(503)
@@ -276,6 +309,7 @@ export function withGuard(handler, opts = {}) {
             }
         }
 
+        if (meterCalls) await meter({ [`call:${prefix}`]: 1 })
         return handler(req, res)
     }
 }
