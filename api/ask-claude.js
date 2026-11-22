@@ -1,5 +1,6 @@
 // api/ask-claude.js
 import { withGuard } from "./_guard.js"
+import { meter, claudeUsage } from "./_meter.js"
 
 export const maxDuration = 60
 
@@ -10,6 +11,9 @@ export const maxDuration = 60
 // tells you when you are close, so you can raise it on evidence rather than
 // guessing.
 const MAX_INPUT_CHARS = 100000
+
+// One place to change the model; the stats page prices tokens by this name.
+const MODEL = "claude-sonnet-4-6"
 
 async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).end()
@@ -45,22 +49,38 @@ async function handler(req, res) {
                 "content-type": "application/json",
             },
             body: JSON.stringify({
-                model: "claude-sonnet-4-6",
+                model: MODEL,
                 max_tokens: 8192,
                 messages: [{ role: "user", content: userInput }],
             }),
         })
     } catch (err) {
         console.error("[ask-claude] upstream fetch failed", err)
+        await meter({ "err:claude": 1 })
         return res.status(502).json({ error: "Upstream request failed" })
     }
 
-    const data = await response.json()
+    let data
+    try {
+        data = await response.json()
+    } catch {
+        data = { error: { type: "bad_json", status: response.status } }
+    }
+
+    // Tokens are billed even when the answer is unusable, so count them first.
+    await meter({
+        ...claudeUsage(MODEL, data?.usage),
+        ...(data?.stop_reason === "max_tokens" ? { "err:claude_truncated": 1 } : {}),
+    })
 
     if (data.error) {
         // Log the upstream detail; do not hand it to the caller. An API error
         // message can carry account and configuration information.
         console.error("[ask-claude] anthropic error", data.error)
+        await meter({
+            "err:claude": 1,
+            ...(data.error?.type === "overloaded_error" ? { "err:claude_overloaded": 1 } : {}),
+        })
         return res.status(502).json({ error: "Model request failed" })
     }
 
